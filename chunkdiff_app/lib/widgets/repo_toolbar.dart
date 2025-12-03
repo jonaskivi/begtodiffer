@@ -27,17 +27,16 @@ class _RepoToolbarState extends ConsumerState<RepoToolbar> {
     debugPrint(
         '[RepoToolbar] Open folder clicked. Platform: ${defaultTargetPlatform.toString()}');
     final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
+    final String? initialDirectory = ref.read(settingsControllerProvider).maybeWhen(
+          data: (AppSettings data) => data.gitFolder,
+          orElse: () => null,
+        );
+    messenger.showSnackBar(
+      const SnackBar(content: Text('Opening folder picker...')),
+    );
     try {
-      final String? directoryPath = await getDirectoryPath().timeout(
-        const Duration(seconds: 10),
-        onTimeout: () {
-          debugPrint('[RepoToolbar] getDirectoryPath timed out');
-          messenger.showSnackBar(
-            const SnackBar(content: Text('Folder picker timed out')),
-          );
-          return null;
-        },
-      );
+      final String? directoryPath =
+          await getDirectoryPath(initialDirectory: initialDirectory);
       debugPrint('[RepoToolbar] getDirectoryPath result: $directoryPath');
       if (directoryPath != null) {
         await ref
