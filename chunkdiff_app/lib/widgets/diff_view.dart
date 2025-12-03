@@ -52,6 +52,8 @@ class _DiffViewState extends ConsumerState<DiffView>
   Widget build(BuildContext context) {
     final AsyncValue<List<SymbolDiff>> asyncDiffs =
         ref.watch(symbolDiffsProvider);
+    final AsyncValue<List<CodeChunk>> asyncChunks =
+        ref.watch(chunkDiffsProvider);
     final SymbolDiff? diff = ref.watch(selectedDiffProvider);
     final String left = _sanitizeText(diff?.leftSnippet ?? _leftController.text);
     final String right =
@@ -68,8 +70,11 @@ class _DiffViewState extends ConsumerState<DiffView>
     final String leftRef = ref.watch(leftRefProvider);
     final String rightRef = ref.watch(rightRefProvider);
     final SymbolChange? selectedChange = ref.watch(selectedChangeProvider);
-    final bool isLoading = asyncDiffs.isLoading;
+    final bool isLoading =
+        asyncDiffs.isLoading || asyncChunks.isLoading && changes.isEmpty;
     final bool hasChanges = !isLoading && changes.isNotEmpty;
+    final ChangesTab activeTab = ref.watch(changesTabProvider);
+    final int selectedChunkIndex = ref.watch(selectedChunkIndexProvider);
 
     return Row(
       children: [
@@ -78,37 +83,10 @@ class _DiffViewState extends ConsumerState<DiffView>
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      'Changes',
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.arrow_upward),
-                    tooltip: 'Previous change',
-                    onPressed: hasChanges && selectedIndex > 0
-                        ? () {
-                            ref
-                                .read(selectedChangeIndexProvider.notifier)
-                                .state = selectedIndex - 1;
-                          }
-                        : null,
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.arrow_downward),
-                    tooltip: 'Next change',
-                    onPressed: hasChanges && selectedIndex < changes.length - 1
-                        ? () {
-                            ref
-                                .read(selectedChangeIndexProvider.notifier)
-                                .state = selectedIndex + 1;
-                          }
-                        : null,
-                  ),
-                ],
+              _TabSwitcher(
+                activeTab: activeTab,
+                onChanged: (ChangesTab tab) =>
+                    ref.read(changesTabProvider.notifier).state = tab,
               ),
               const SizedBox(height: 8),
               Expanded(
@@ -123,37 +101,43 @@ class _DiffViewState extends ConsumerState<DiffView>
                           _SkeletonListItem(animation: _shimmerController),
                         ],
                       )
-                    : hasChanges
-                        ? ListView.separated(
-                            itemCount: changes.length,
-                            separatorBuilder: (_, __) =>
-                                const Divider(height: 1),
-                            itemBuilder: (BuildContext _, int index) {
-                              final SymbolChange change = changes[index];
-                              final bool selected = index == selectedIndex;
-                              return ListTile(
-                                dense: true,
-                                selected: selected,
-                                title: Text(
-                                  change.name,
-                                  style: TextStyle(
-                                    fontWeight: selected
-                                        ? FontWeight.w600
-                                        : FontWeight.w400,
-                                  ),
-                                ),
-                                subtitle: Text(
-                                  change.kind.name,
-                                  style: TextStyle(
-                                    color: Colors.grey[700],
-                                  ),
-                                ),
-                                onTap: () => ref
-                                    .read(selectedChangeIndexProvider.notifier)
-                                    .state = index,
-                              );
-                            },
-                          )
+                        : hasChanges
+                        ? (activeTab == ChangesTab.files
+                            ? ListView.separated(
+                                itemCount: changes.length,
+                                separatorBuilder: (_, __) =>
+                                    const Divider(height: 1),
+                                itemBuilder: (BuildContext _, int index) {
+                                  final SymbolChange change = changes[index];
+                                  final bool selected = index == selectedIndex;
+                                  return ListTile(
+                                    dense: true,
+                                    selected: selected,
+                                    title: Text(
+                                      change.name,
+                                      style: TextStyle(
+                                        fontWeight: selected
+                                            ? FontWeight.w600
+                                            : FontWeight.w400,
+                                      ),
+                                    ),
+                                    subtitle: Text(
+                                      change.kind.name,
+                                      style: TextStyle(
+                                        color: Colors.grey[700],
+                                      ),
+                                    ),
+                                    // Files tab is non-interactive for now.
+                                  );
+                                },
+                              )
+                            : _ChunkList(
+                                asyncChunks: asyncChunks,
+                                selectedChunkIndex: selectedChunkIndex,
+                                onSelect: (int idx) => ref
+                                    .read(selectedChunkIndexProvider.notifier)
+                                    .state = idx,
+                              ))
                         : Center(
                             child: Text(
                               'No changes for $leftRef → $rightRef',
@@ -195,35 +179,10 @@ class _DiffViewState extends ConsumerState<DiffView>
                           ),
                         ],
                       )
-                    : hasChanges
-                        ? Row(
-                            children: [
-                              Expanded(
-                                child: _DiffPane(
-                                  title: 'Left (old)',
-                                  controller: _leftController,
-                                  backgroundColor: const Color(0xFFFFF3F3),
-                                ),
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: _DiffPane(
-                                  title: 'Right (new)',
-                                  controller: _rightController,
-                                  backgroundColor: const Color(0xFFF2FFF4),
-                                ),
-                              ),
-                            ],
-                          )
-                        : Center(
-                            child: Text(
-                              'No diff content to display.',
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .bodyMedium
-                                  ?.copyWith(color: Colors.grey[400]),
-                            ),
-                          ),
+                    : _ChunkDiffView(
+                        asyncChunks: asyncChunks,
+                        selectedChunkIndex: selectedChunkIndex,
+                      ),
               ),
             ],
           ),
@@ -279,47 +238,35 @@ class _DiffMetaBar extends StatelessWidget {
 
 class _DiffPane extends StatelessWidget {
   const _DiffPane({
-    required this.title,
-    required this.controller,
+    required this.text,
     required this.backgroundColor,
   });
 
-  final String title;
-  final CodeController controller;
+  final String text;
   final Color backgroundColor;
 
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          title,
-          style: theme.textTheme.titleSmall,
-        ),
-        const SizedBox(height: 6),
-        Expanded(
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              color: backgroundColor,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: theme.colorScheme.outlineVariant),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.all(8),
-              child: CodeTheme(
-                data: CodeThemeData(styles: monokaiSublimeTheme),
-                child: CodeField(
-                  controller: controller,
-                  textStyle: const TextStyle(
+        DecoratedBox(
+          decoration: BoxDecoration(
+            color: backgroundColor,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: theme.colorScheme.outlineVariant),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(8),
+            child: SizedBox(
+              height: 240,
+              child: SingleChildScrollView(
+                child: SelectableText(
+                  text,
+                  style: const TextStyle(
                     fontFamily: 'SourceCodePro',
                     fontSize: 13,
-                  ),
-                  expands: true,
-                  lineNumberStyle: const LineNumberStyle(
-                    width: 40,
-                    textStyle: TextStyle(color: Color(0xFF8A8A8A)),
+                    color: Colors.white,
                   ),
                 ),
               ),
@@ -345,6 +292,160 @@ class _SkeletonPane extends StatelessWidget {
         animation: animation,
       ),
     );
+  }
+}
+
+class _TabSwitcher extends StatelessWidget {
+  const _TabSwitcher({
+    required this.activeTab,
+    required this.onChanged,
+  });
+
+  final ChangesTab activeTab;
+  final ValueChanged<ChangesTab> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: 8,
+      children: [
+        _TabChip(
+          label: 'Files',
+          selected: activeTab == ChangesTab.files,
+          onTap: () => onChanged(ChangesTab.files),
+        ),
+        _TabChip(
+          label: 'Chunks',
+          selected: activeTab == ChangesTab.chunks,
+          onTap: () => onChanged(ChangesTab.chunks),
+        ),
+      ],
+    );
+  }
+}
+
+class _TabChip extends StatelessWidget {
+  const _TabChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return ChoiceChip(
+      label: Text(label),
+      selected: selected,
+      onSelected: (_) => onTap(),
+      selectedColor: Colors.indigo.withOpacity(0.2),
+      labelStyle: TextStyle(
+        color: selected ? Colors.indigo[100] : Colors.grey[300],
+        fontWeight: FontWeight.w600,
+      ),
+      backgroundColor: Colors.grey.shade900,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+      ),
+    );
+  }
+}
+
+class _ChunkList extends StatelessWidget {
+  const _ChunkList({
+    required this.asyncChunks,
+    required this.selectedChunkIndex,
+    required this.onSelect,
+  });
+
+  final AsyncValue<List<CodeChunk>> asyncChunks;
+  final int selectedChunkIndex;
+  final ValueChanged<int> onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    final List<CodeChunk> chunks =
+        asyncChunks.value ?? const <CodeChunk>[];
+
+    if (chunks.isEmpty) {
+      return Center(
+        child: Text(
+          'No diff content to display.',
+          style: Theme.of(context)
+              .textTheme
+              .bodyMedium
+              ?.copyWith(color: Colors.grey[400]),
+        ),
+      );
+    }
+
+    return ListView.separated(
+      padding: EdgeInsets.zero,
+      itemCount: chunks.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 12),
+      itemBuilder: (BuildContext context, int index) {
+        final CodeChunk chunk = chunks[index];
+        final bool selected = index == selectedChunkIndex;
+        return ListTile(
+          dense: true,
+          selected: selected,
+          title: Text(chunk.filePath),
+          subtitle: Text('Old ${chunk.oldStart}-${chunk.oldEnd} → '
+              'New ${chunk.newStart}-${chunk.newEnd}'),
+          onTap: () => onSelect(index),
+        );
+      },
+    );
+  }
+}
+
+class _ChunkDiffView extends StatelessWidget {
+  const _ChunkDiffView({
+    required this.asyncChunks,
+    required this.selectedChunkIndex,
+  });
+
+  final AsyncValue<List<CodeChunk>> asyncChunks;
+  final int selectedChunkIndex;
+
+  @override
+  Widget build(BuildContext context) {
+    final List<CodeChunk> all = asyncChunks.value ?? const <CodeChunk>[];
+    if (all.isEmpty) {
+      return Center(
+        child: Text(
+          'No diff content to display.',
+          style: Theme.of(context)
+              .textTheme
+              .bodyMedium
+              ?.copyWith(color: Colors.grey[400]),
+        ),
+      );
+    }
+    final int clampedIndex = selectedChunkIndex.clamp(0, all.length - 1);
+    final CodeChunk chunk = all[clampedIndex];
+    final String leftText = _sanitizeText(chunk.leftText);
+    final String rightText = _sanitizeText(chunk.rightText);
+    return Row(
+      children: [
+        Expanded(
+              child: _DiffPane(
+                text: leftText,
+                backgroundColor: const Color(0xFF272822),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _DiffPane(
+                text: rightText,
+                backgroundColor: const Color(0xFF272822),
+              ),
+            ),
+          ],
+        );
   }
 }
 

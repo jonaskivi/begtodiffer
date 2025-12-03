@@ -8,6 +8,26 @@ enum SymbolKind { function, method, classType, enumType, other }
 /// Special ref string to indicate the working tree instead of a named ref.
 const String kWorktreeRef = 'WORKTREE';
 
+class CodeChunk {
+  final String filePath;
+  final int oldStart;
+  final int oldEnd;
+  final int newStart;
+  final int newEnd;
+  final String leftText;
+  final String rightText;
+
+  const CodeChunk({
+    required this.filePath,
+    required this.oldStart,
+    required this.oldEnd,
+    required this.newStart,
+    required this.newEnd,
+    required this.leftText,
+    required this.rightText,
+  });
+}
+
 class SymbolChange {
   final String name;
   final SymbolKind kind;
@@ -118,6 +138,52 @@ void main() {
 void main() {
   final ChunkDiffExample example = ChunkDiffExample('Developer', version: 2);
   print('\${example.name} v\${example.version}');
+}
+''',
+    ),
+  ];
+}
+
+List<CodeChunk> dummyCodeChunks() {
+  return const <CodeChunk>[
+    CodeChunk(
+      filePath: 'lib/src/example.dart',
+      oldStart: 3,
+      oldEnd: 10,
+      newStart: 3,
+      newEnd: 12,
+      leftText: r'''
+class Greeter {
+  String greet(String name) {
+    return 'Hello, $name';
+  }
+}
+''',
+      rightText: r'''
+class Greeter {
+  String greet(String name, {bool excited = false}) {
+    final String msg = 'Hello, $name';
+    return excited ? '$msg!' : msg;
+  }
+}
+''',
+    ),
+    CodeChunk(
+      filePath: 'lib/main.dart',
+      oldStart: 1,
+      oldEnd: 6,
+      newStart: 1,
+      newEnd: 7,
+      leftText: r'''
+void main() {
+  final Greeter greeter = Greeter();
+  print(greeter.greet('World'));
+}
+''',
+      rightText: r'''
+void main() {
+  final Greeter greeter = Greeter();
+  print(greeter.greet('World', excited: true));
 }
 ''',
     ),
@@ -306,6 +372,181 @@ Future<List<SymbolDiff>> loadSymbolDiffs(
   }
 
   return diffs;
+}
+
+Future<List<CodeChunk>> loadChunkDiffs(
+  String repoPath,
+  String leftRef,
+  String rightRef, {
+  bool dartOnly = true,
+}) async {
+  final bool repoOk = await isGitRepo(repoPath);
+  if (!repoOk) {
+    return <CodeChunk>[];
+  }
+
+  final String? root = await gitRoot(repoPath);
+  final String repoRoot = root ?? repoPath;
+  final bool isSubdir = root != null && !p.equals(p.normalize(repoPath), root);
+  final String? relativeScope =
+      isSubdir ? p.relative(repoPath, from: repoRoot) : null;
+
+  final List<String> files = await listChangedFilesInScope(
+    repoRoot,
+    leftRef,
+    rightRef,
+    relativeScope,
+  );
+  final Iterable<String> filtered = dartOnly
+      ? files.where((String f) => f.endsWith('.dart'))
+      : files;
+
+  final List<CodeChunk> chunks = <CodeChunk>[];
+  for (final String file in filtered) {
+    final List<_Hunk> hunks =
+        await _parseGitHunks(repoRoot, leftRef, rightRef, file);
+    if (hunks.isEmpty) {
+      continue;
+    }
+    final List<_Hunk> merged = _mergeHunks(hunks, gapThreshold: 6);
+
+    final String? leftContent = await fileContentAtRef(repoRoot, leftRef, file);
+    final String? rightContent =
+        await fileContentAtRef(repoRoot, rightRef, file);
+    if (leftContent == null || rightContent == null) {
+      continue;
+    }
+    final List<String> leftLines = leftContent.split('\n');
+    final List<String> rightLines = rightContent.split('\n');
+
+    for (final _Hunk h in merged) {
+      final int oldStart = h.oldStart;
+      final int oldEnd = h.oldStart + h.oldCount - 1;
+      final int newStart = h.newStart;
+      final int newEnd = h.newStart + h.newCount - 1;
+
+      final String leftSnippet =
+          _sliceLines(leftLines, oldStart, oldEnd).join('\n');
+      final String rightSnippet =
+          _sliceLines(rightLines, newStart, newEnd).join('\n');
+
+      chunks.add(
+        CodeChunk(
+          filePath: file,
+          oldStart: oldStart,
+          oldEnd: oldEnd,
+          newStart: newStart,
+          newEnd: newEnd,
+          leftText: leftSnippet,
+          rightText: rightSnippet,
+        ),
+      );
+    }
+  }
+
+  return chunks;
+}
+
+class _Hunk {
+  final int oldStart;
+  final int oldCount;
+  final int newStart;
+  final int newCount;
+
+  const _Hunk({
+    required this.oldStart,
+    required this.oldCount,
+    required this.newStart,
+    required this.newCount,
+  });
+}
+
+Future<List<_Hunk>> _parseGitHunks(
+  String repoPath,
+  String leftRef,
+  String rightRef,
+  String file,
+) async {
+  try {
+    final bool useWorktree = rightRef == kWorktreeRef;
+    final List<String> args = <String>[
+      'diff',
+      '-U3',
+      leftRef,
+      if (!useWorktree) rightRef,
+      '--',
+      file,
+    ];
+    final ProcessResult result = await _runGit(
+      repoPath,
+      args,
+      logStdoutSnippet: false,
+    );
+    if (result.exitCode != 0) {
+      return <_Hunk>[];
+    }
+    final String output = _decodeOutput(result.stdout);
+    final RegExp header =
+        RegExp(r'^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@');
+    final List<_Hunk> hunks = <_Hunk>[];
+    for (final String line in output.split('\n')) {
+      final RegExpMatch? m = header.firstMatch(line);
+      if (m != null) {
+        final int oldStart = int.parse(m.group(1)!);
+        final int oldCount = m.group(2) != null ? int.parse(m.group(2)!) : 1;
+        final int newStart = int.parse(m.group(3)!);
+        final int newCount = m.group(4) != null ? int.parse(m.group(4)!) : 1;
+        hunks.add(_Hunk(
+          oldStart: oldStart,
+          oldCount: oldCount,
+          newStart: newStart,
+          newCount: newCount,
+        ));
+      }
+    }
+    return hunks;
+  } catch (_) {
+    return <_Hunk>[];
+  }
+}
+
+List<_Hunk> _mergeHunks(List<_Hunk> hunks, {int gapThreshold = 6}) {
+  if (hunks.isEmpty) return hunks;
+  final List<_Hunk> sorted = List<_Hunk>.from(hunks)
+    ..sort((a, b) => a.oldStart.compareTo(b.oldStart));
+  final List<_Hunk> merged = <_Hunk>[];
+  _Hunk current = sorted.first;
+  for (int i = 1; i < sorted.length; i++) {
+    final _Hunk next = sorted[i];
+    final int currentOldEnd = current.oldStart + current.oldCount - 1;
+    final int nextOldStart = next.oldStart;
+    final int gap = nextOldStart - currentOldEnd - 1;
+    if (gap <= gapThreshold) {
+      final int newOldStart = current.oldStart;
+      final int newOldEnd = next.oldStart + next.oldCount - 1;
+      final int newNewStart = current.newStart;
+      final int newNewEnd = next.newStart + next.newCount - 1;
+      current = _Hunk(
+        oldStart: newOldStart,
+        oldCount: (newOldEnd - newOldStart) + 1,
+        newStart: newNewStart,
+        newCount: (newNewEnd - newNewStart) + 1,
+      );
+    } else {
+      merged.add(current);
+      current = next;
+    }
+  }
+  merged.add(current);
+  return merged;
+}
+
+List<String> _sliceLines(List<String> lines, int start, int end) {
+  if (start <= 0) start = 1;
+  if (end < start) return <String>[];
+  final int startIdx = start - 1;
+  final int endIdx = end.clamp(0, lines.length);
+  return lines.sublist(startIdx, endIdx);
 }
 
 // Logging helpers for external commands

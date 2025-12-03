@@ -168,6 +168,26 @@ final FutureProvider<List<SymbolDiff>> symbolDiffsProvider =
   }
 });
 
+final FutureProvider<List<CodeChunk>> chunkDiffsProvider =
+    FutureProvider<List<CodeChunk>>((Ref ref) async {
+  if (kForceMockData) {
+    return dummyCodeChunks();
+  }
+  final AppSettings settings =
+      await ref.watch(settingsControllerProvider.future);
+  final String? repo = settings.gitFolder;
+  final String left = ref.watch(leftRefProvider);
+  final String right = ref.watch(rightRefProvider);
+  if (repo == null || repo.isEmpty) {
+    return <CodeChunk>[];
+  }
+  try {
+    return await loadChunkDiffs(repo, left, right);
+  } catch (_) {
+    return <CodeChunk>[];
+  }
+});
+
 final Provider<List<SymbolChange>> symbolChangesProvider =
     Provider<List<SymbolChange>>((Ref ref) {
   final AsyncValue<List<SymbolDiff>> diffs = ref.watch(symbolDiffsProvider);
@@ -201,3 +221,11 @@ final Provider<SymbolDiff?> selectedDiffProvider =
     },
   );
 });
+
+enum ChangesTab { files, chunks }
+
+final StateProvider<ChangesTab> changesTabProvider =
+    StateProvider<ChangesTab>((Ref ref) => ChangesTab.files);
+
+final StateProvider<int> selectedChunkIndexProvider =
+    StateProvider<int>((Ref ref) => 0);
