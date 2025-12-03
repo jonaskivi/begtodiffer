@@ -78,6 +78,8 @@ class _DiffViewState extends ConsumerState<DiffView>
     final bool hasChanges = (changes.isNotEmpty && !isLoading) || hasChunkData;
     final ChangesTab activeTab = ref.watch(changesTabProvider);
     final int selectedChunkIndex = ref.watch(selectedChunkIndexProvider);
+    final SymbolChange? selectedFileChange =
+        activeTab == ChangesTab.files ? selectedChange : null;
 
     return Row(
       children: [
@@ -130,7 +132,10 @@ class _DiffViewState extends ConsumerState<DiffView>
                                         color: Colors.grey[700],
                                       ),
                                     ),
-                                    // Files tab is non-interactive for now.
+                                    onTap: () => ref
+                                        .read(selectedChangeIndexProvider
+                                            .notifier)
+                                        .state = index,
                                   );
                                 },
                               )
@@ -191,6 +196,8 @@ class _DiffViewState extends ConsumerState<DiffView>
                     : _ChunkDiffView(
                         asyncChunks: asyncChunks,
                         selectedChunkIndex: selectedChunkIndex,
+                        selectedFileChange: selectedChange,
+                        activeTab: activeTab,
                       ),
               ),
             ],
@@ -415,10 +422,14 @@ class _ChunkDiffView extends StatelessWidget {
   const _ChunkDiffView({
     required this.asyncChunks,
     required this.selectedChunkIndex,
+    required this.selectedFileChange,
+    required this.activeTab,
   });
 
   final AsyncValue<List<CodeChunk>> asyncChunks;
   final int selectedChunkIndex;
+  final SymbolChange? selectedFileChange;
+  final ChangesTab activeTab;
 
   @override
   Widget build(BuildContext context) {
@@ -434,13 +445,58 @@ class _ChunkDiffView extends StatelessWidget {
         ),
       );
     }
-    final int clampedIndex = selectedChunkIndex.clamp(0, all.length - 1);
-    final CodeChunk chunk = all[clampedIndex];
-    final String leftText = _sanitizeText(chunk.leftText);
-    final String rightText = _sanitizeText(chunk.rightText);
-    return Row(
-      children: [
-        Expanded(
+    if (activeTab == ChangesTab.chunks) {
+      final int clampedIndex = selectedChunkIndex.clamp(0, all.length - 1);
+      final CodeChunk chunk = all[clampedIndex];
+      final String leftText = _sanitizeText(chunk.leftText);
+      final String rightText = _sanitizeText(chunk.rightText);
+      return Row(
+        children: [
+          Expanded(
+            child: _DiffPane(
+              text: leftText,
+              backgroundColor: const Color(0xFF272822),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: _DiffPane(
+              text: rightText,
+              backgroundColor: const Color(0xFF272822),
+            ),
+          ),
+        ],
+      );
+    }
+
+    final String? targetFile =
+        selectedFileChange?.beforePath ?? selectedFileChange?.afterPath;
+    final List<CodeChunk> filtered = targetFile == null
+        ? all
+        : all.where((CodeChunk c) => c.filePath == targetFile).toList();
+    if (filtered.isEmpty) {
+      return Center(
+        child: Text(
+          'No diff content to display.',
+          style: Theme.of(context)
+              .textTheme
+              .bodyMedium
+              ?.copyWith(color: Colors.grey[400]),
+        ),
+      );
+    }
+
+    return ListView.separated(
+      padding: EdgeInsets.zero,
+      itemCount: filtered.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 12),
+      itemBuilder: (BuildContext context, int index) {
+        final CodeChunk chunk = filtered[index];
+        final String leftText = _sanitizeText(chunk.leftText);
+        final String rightText = _sanitizeText(chunk.rightText);
+        return Row(
+          children: [
+            Expanded(
               child: _DiffPane(
                 text: leftText,
                 backgroundColor: const Color(0xFF272822),
@@ -455,6 +511,8 @@ class _ChunkDiffView extends StatelessWidget {
             ),
           ],
         );
+      },
+    );
   }
 }
 
