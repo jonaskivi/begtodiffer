@@ -116,6 +116,26 @@ final StateProvider<String> leftRefProvider =
 final StateProvider<String> rightRefProvider =
     StateProvider<String>((Ref ref) => 'HEAD');
 
+final FutureProvider<bool> gitAccessProvider =
+    FutureProvider<bool>((Ref ref) async {
+  final AppSettings settings =
+      await ref.watch(settingsControllerProvider.future);
+  final String? path = settings.gitFolder;
+  if (path == null || path.isEmpty) {
+    return false;
+  }
+  try {
+    final bool repoOk = await isGitRepo(path);
+    if (!repoOk) {
+      return false;
+    }
+    final List<String> refs = await listGitRefs(path);
+    return refs.isNotEmpty;
+  } catch (_) {
+    return false;
+  }
+});
+
 final Provider<List<SymbolDiff>> symbolDiffsProvider =
     Provider<List<SymbolDiff>>((Ref ref) => dummySymbolDiffs());
 
