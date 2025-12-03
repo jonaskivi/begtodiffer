@@ -158,13 +158,13 @@ final FutureProvider<List<SymbolDiff>> symbolDiffsProvider =
   final String left = ref.watch(leftRefProvider);
   final String right = ref.watch(rightRefProvider);
   if (repo == null || repo.isEmpty) {
-    return dummySymbolDiffs();
+    return <SymbolDiff>[];
   }
   try {
     final List<SymbolDiff> diffs = await loadSymbolDiffs(repo, left, right);
-    return diffs.isNotEmpty ? diffs : dummySymbolDiffs();
+    return diffs;
   } catch (_) {
-    return dummySymbolDiffs();
+    return <SymbolDiff>[];
   }
 });
 
@@ -173,7 +173,9 @@ final Provider<List<SymbolChange>> symbolChangesProvider =
   final AsyncValue<List<SymbolDiff>> diffs = ref.watch(symbolDiffsProvider);
   return diffs.maybeWhen(
     data: (List<SymbolDiff> d) => d.map((SymbolDiff s) => s.change).toList(),
-    orElse: () => dummySymbolDiffs().map((SymbolDiff s) => s.change).toList(),
+    orElse: () => kForceMockData
+        ? dummySymbolDiffs().map((SymbolDiff s) => s.change).toList()
+        : <SymbolChange>[],
   );
 });
 
@@ -189,9 +191,11 @@ final Provider<SymbolDiff?> selectedDiffProvider =
       return null;
     },
     orElse: () {
-      final List<SymbolDiff> fallback = dummySymbolDiffs();
-      if (index >= 0 && index < fallback.length) {
-        return fallback[index];
+      if (kForceMockData) {
+        final List<SymbolDiff> fallback = dummySymbolDiffs();
+        if (index >= 0 && index < fallback.length) {
+          return fallback[index];
+        }
       }
       return null;
     },

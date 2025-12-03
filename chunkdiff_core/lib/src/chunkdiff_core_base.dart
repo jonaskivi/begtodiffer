@@ -229,7 +229,7 @@ Future<List<SymbolDiff>> loadSymbolDiffs(
 }) async {
   final bool repoOk = await isGitRepo(repoPath);
   if (!repoOk) {
-    return dummySymbolDiffs();
+    return <SymbolDiff>[];
   }
 
   final List<String> files =
@@ -256,5 +256,5 @@ Future<List<SymbolDiff>> loadSymbolDiffs(
     );
   }
 
-  return diffs.isNotEmpty ? diffs : dummySymbolDiffs();
+  return diffs;
 }

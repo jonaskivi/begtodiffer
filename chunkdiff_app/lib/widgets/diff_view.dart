@@ -58,6 +58,7 @@ class _DiffViewState extends ConsumerState<DiffView> {
     final String leftRef = ref.watch(leftRefProvider);
     final String rightRef = ref.watch(rightRefProvider);
     final SymbolChange? selectedChange = ref.watch(selectedChangeProvider);
+    final bool hasChanges = changes.isNotEmpty;
 
     return Row(
       children: [
@@ -77,7 +78,7 @@ class _DiffViewState extends ConsumerState<DiffView> {
                   IconButton(
                     icon: const Icon(Icons.arrow_upward),
                     tooltip: 'Previous change',
-                    onPressed: selectedIndex > 0
+                    onPressed: hasChanges && selectedIndex > 0
                         ? () {
                             ref
                                 .read(selectedChangeIndexProvider.notifier)
@@ -88,7 +89,7 @@ class _DiffViewState extends ConsumerState<DiffView> {
                   IconButton(
                     icon: const Icon(Icons.arrow_downward),
                     tooltip: 'Next change',
-                    onPressed: selectedIndex < changes.length - 1
+                    onPressed: hasChanges && selectedIndex < changes.length - 1
                         ? () {
                             ref
                                 .read(selectedChangeIndexProvider.notifier)
@@ -100,34 +101,46 @@ class _DiffViewState extends ConsumerState<DiffView> {
               ),
               const SizedBox(height: 8),
               Expanded(
-                child: ListView.separated(
-                  itemCount: changes.length,
-                  separatorBuilder: (_, __) => const Divider(height: 1),
-                  itemBuilder: (BuildContext _, int index) {
-                    final SymbolChange change = changes[index];
-                    final bool selected = index == selectedIndex;
-                    return ListTile(
-                      dense: true,
-                      selected: selected,
-                      title: Text(
-                        change.name,
-                        style: TextStyle(
-                          fontWeight:
-                              selected ? FontWeight.w600 : FontWeight.w400,
+                child: hasChanges
+                    ? ListView.separated(
+                        itemCount: changes.length,
+                        separatorBuilder: (_, __) => const Divider(height: 1),
+                        itemBuilder: (BuildContext _, int index) {
+                          final SymbolChange change = changes[index];
+                          final bool selected = index == selectedIndex;
+                          return ListTile(
+                            dense: true,
+                            selected: selected,
+                            title: Text(
+                              change.name,
+                              style: TextStyle(
+                                fontWeight: selected
+                                    ? FontWeight.w600
+                                    : FontWeight.w400,
+                              ),
+                            ),
+                            subtitle: Text(
+                              change.kind.name,
+                              style: TextStyle(
+                                color: Colors.grey[700],
+                              ),
+                            ),
+                            onTap: () => ref
+                                .read(selectedChangeIndexProvider.notifier)
+                                .state = index,
+                          );
+                        },
+                      )
+                    : Center(
+                        child: Text(
+                          'No changes for $leftRef → $rightRef',
+                          style: Theme.of(context)
+                              .textTheme
+                              .bodyMedium
+                              ?.copyWith(color: Colors.grey[400]),
+                          textAlign: TextAlign.center,
                         ),
                       ),
-                      subtitle: Text(
-                        change.kind.name,
-                        style: TextStyle(
-                          color: Colors.grey[700],
-                        ),
-                      ),
-                      onTap: () => ref
-                          .read(selectedChangeIndexProvider.notifier)
-                          .state = index,
-                    );
-                  },
-                ),
               ),
             ],
           ),
@@ -143,25 +156,35 @@ class _DiffViewState extends ConsumerState<DiffView> {
               ),
               const SizedBox(height: 8),
               Expanded(
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: _DiffPane(
-                        title: 'Left (old)',
-                        controller: _leftController,
-                        backgroundColor: const Color(0xFFFFF3F3),
+                child: hasChanges
+                    ? Row(
+                        children: [
+                          Expanded(
+                            child: _DiffPane(
+                              title: 'Left (old)',
+                              controller: _leftController,
+                              backgroundColor: const Color(0xFFFFF3F3),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: _DiffPane(
+                              title: 'Right (new)',
+                              controller: _rightController,
+                              backgroundColor: const Color(0xFFF2FFF4),
+                            ),
+                          ),
+                        ],
+                      )
+                    : Center(
+                        child: Text(
+                          'No diff content to display.',
+                          style: Theme.of(context)
+                              .textTheme
+                              .bodyMedium
+                              ?.copyWith(color: Colors.grey[400]),
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: _DiffPane(
-                        title: 'Right (new)',
-                        controller: _rightController,
-                        backgroundColor: const Color(0xFFF2FFF4),
-                      ),
-                    ),
-                  ],
-                ),
               ),
             ],
           ),
