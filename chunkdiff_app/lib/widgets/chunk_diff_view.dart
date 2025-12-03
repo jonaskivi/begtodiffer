@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:chunkdiff_core/chunkdiff_core.dart';
+import 'diff_lines_view.dart';
 
 class ChunkDiffView extends StatelessWidget {
   const ChunkDiffView({
@@ -29,72 +30,12 @@ class ChunkDiffView extends StatelessWidget {
     }
     final int clamped = selectedIndex.clamp(0, chunks.length - 1);
     final CodeChunk chunk = chunks[clamped];
-    final String leftText = _sanitizeText(chunk.leftText);
-    final String rightText = _sanitizeText(chunk.rightText);
-    return Row(
-      children: [
-        Expanded(
-          child: _DiffPane(
-            text: leftText,
-            backgroundColor: const Color(0xFF272822),
-          ),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: _DiffPane(
-            text: rightText,
-            backgroundColor: const Color(0xFF272822),
-          ),
-        ),
-      ],
+    return DiffLinesView(
+      lines: chunk.lines,
+      header:
+          '${chunk.name} • ${chunk.filePath} (lines ${chunk.oldStart}-${chunk.oldEnd})',
+      subtitle: chunk.ignored ? 'Ignored' : null,
+      scrollable: true,
     );
   }
-}
-
-class _DiffPane extends StatelessWidget {
-  const _DiffPane({
-    required this.text,
-    required this.backgroundColor,
-  });
-
-  final String text;
-  final Color backgroundColor;
-
-  @override
-  Widget build(BuildContext context) {
-    final ThemeData theme = Theme.of(context);
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: backgroundColor,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: theme.colorScheme.outlineVariant),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(8),
-        child: SizedBox(
-          height: 240,
-          child: SingleChildScrollView(
-            child: SelectableText(
-              text,
-              style: const TextStyle(
-                fontFamily: 'SourceCodePro',
-                fontSize: 13,
-                color: Colors.white,
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-String _sanitizeText(String input) {
-  final StringBuffer buffer = StringBuffer();
-  for (final int rune in input.runes) {
-    if (rune >= 0 && rune <= 0x10FFFF) {
-      buffer.writeCharCode(rune);
-    }
-  }
-  return buffer.toString();
 }
