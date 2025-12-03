@@ -1,18 +1,18 @@
 class AppSettings {
-  final String? repoPath;
+  final String? gitFolder;
 
-  const AppSettings({this.repoPath});
+  const AppSettings({this.gitFolder});
 
-  AppSettings copyWith({String? repoPath}) {
-    return AppSettings(repoPath: repoPath ?? this.repoPath);
+  AppSettings copyWith({String? gitFolder}) {
+    return AppSettings(gitFolder: gitFolder ?? this.gitFolder);
   }
 
   Map<String, Object?> toJson() => <String, Object?>{
-        'repoPath': repoPath,
+        'gitFolder': gitFolder,
       };
 
   static AppSettings fromJson(Map<String, Object?> json) {
-    final Object? pathValue = json['repoPath'];
-    return AppSettings(repoPath: pathValue as String?);
+    final Object? pathValue = json['gitFolder'];
+    return AppSettings(gitFolder: pathValue as String?);
   }
 }

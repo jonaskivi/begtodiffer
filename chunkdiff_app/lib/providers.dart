@@ -43,10 +43,10 @@ class SettingsController extends AutoDisposeAsyncNotifier<AppSettings> {
     return repo.load();
   }
 
-  Future<void> setRepoPath(String path) async {
+  Future<void> setGitFolder(String path) async {
     final SettingsRepository repo = ref.read(settingsRepositoryProvider);
     final AppSettings next = (state.value ?? const AppSettings())
-        .copyWith(repoPath: path);
+        .copyWith(gitFolder: path);
     await repo.save(next);
     state = AsyncData(next);
     ref.invalidate(repoValidationProvider);
@@ -62,11 +62,11 @@ final FutureProvider<GitValidationResult> repoValidationProvider =
     FutureProvider<GitValidationResult>((Ref ref) async {
   final AppSettings settings =
       await ref.watch(settingsControllerProvider.future);
-  final String? path = settings.repoPath;
+  final String? path = settings.gitFolder;
   if (path == null || path.isEmpty) {
     return const GitValidationResult(
       isRepo: false,
-      message: 'No repository selected',
+      message: 'No Git folder selected',
     );
   }
   final GitService git = ref.read(gitServiceProvider);
