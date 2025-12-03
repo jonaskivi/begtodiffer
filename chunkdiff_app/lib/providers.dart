@@ -5,6 +5,13 @@ import 'models/app_settings.dart';
 import 'services/git_service.dart';
 import 'services/settings_repository.dart';
 
+class DiffTextPair {
+  final String left;
+  final String right;
+
+  const DiffTextPair({required this.left, required this.right});
+}
+
 const String kSampleDartCode = '''
 import 'dart:math';
 
@@ -29,39 +36,6 @@ final Provider<String> helloFromCoreProvider =
 
 final StateProvider<String> codeContentProvider =
     StateProvider<String>((Ref ref) => kSampleDartCode);
-
-const String kSampleLeftDiff = '''
-class ChunkDiffExample {
-  String greet(String name) {
-    return 'Hello, \$name from v1';
-  }
-}
-
-void main() {
-  final ChunkDiffExample example = ChunkDiffExample();
-  print(example.greet('Developer'));
-}
-''';
-
-const String kSampleRightDiff = '''
-class ChunkDiffExample {
-  String greet(String name, {bool excited = false}) {
-    final String base = 'Hello, \$name from v2';
-    return excited ? '\$base!' : base;
-  }
-}
-
-void main() {
-  final ChunkDiffExample example = ChunkDiffExample();
-  print(example.greet('Developer', excited: true));
-}
-''';
-
-final StateProvider<String> leftDiffCodeProvider =
-    StateProvider<String>((Ref ref) => kSampleLeftDiff);
-
-final StateProvider<String> rightDiffCodeProvider =
-    StateProvider<String>((Ref ref) => kSampleRightDiff);
 
 final Provider<SettingsRepository> settingsRepositoryProvider =
     Provider<SettingsRepository>((Ref ref) => SettingsRepository());
@@ -104,4 +78,94 @@ final FutureProvider<GitValidationResult> repoValidationProvider =
   }
   final GitService git = ref.read(gitServiceProvider);
   return git.validateRepo(path);
+});
+
+final Provider<List<SymbolChange>> symbolChangesProvider =
+    Provider<List<SymbolChange>>((Ref ref) => dummySymbolChanges());
+
+final StateProvider<int> selectedChangeIndexProvider =
+    StateProvider<int>((Ref ref) => 0);
+
+final Provider<SymbolChange?> selectedChangeProvider =
+    Provider<SymbolChange?>((Ref ref) {
+  final List<SymbolChange> changes = ref.watch(symbolChangesProvider);
+  final int index = ref.watch(selectedChangeIndexProvider);
+  if (index < 0 || index >= changes.length) {
+    return null;
+  }
+  return changes[index];
+});
+
+const Map<String, DiffTextPair> _sampleDiffs = <String, DiffTextPair>{
+  'ChunkDiffExample.greet': DiffTextPair(
+    left: '''
+class ChunkDiffExample {
+  String greet(String name) {
+    return 'Hello, \$name from v1';
+  }
+}
+
+void main() {
+  final ChunkDiffExample example = ChunkDiffExample();
+  print(example.greet('Developer'));
+}
+''',
+    right: '''
+class ChunkDiffExample {
+  String greet(String name, {bool excited = false}) {
+    final String base = 'Hello, \$name from v2';
+    return excited ? '\$base!' : base;
+  }
+}
+
+void main() {
+  final ChunkDiffExample example = ChunkDiffExample();
+  print(example.greet('Developer', excited: true));
+}
+''',
+  ),
+  'ChunkDiffExample': DiffTextPair(
+    left: '''
+class ChunkDiffExample {
+  final String name;
+
+  const ChunkDiffExample(this.name);
+}
+''',
+    right: '''
+class ChunkDiffExample {
+  final String name;
+  final int version;
+
+  const ChunkDiffExample(this.name, {this.version = 2});
+}
+''',
+  ),
+  'main': DiffTextPair(
+    left: '''
+void main() {
+  final ChunkDiffExample example = ChunkDiffExample('Developer');
+  print(example.name);
+}
+''',
+    right: '''
+void main() {
+  final ChunkDiffExample example = ChunkDiffExample('Developer', version: 2);
+  print('\${example.name} v\${example.version}');
+}
+''',
+  ),
+};
+
+final Provider<DiffTextPair> selectedDiffTextProvider =
+    Provider<DiffTextPair>((Ref ref) {
+  final SymbolChange? change = ref.watch(selectedChangeProvider);
+  if (change == null) {
+    return const DiffTextPair(left: kSampleDartCode, right: kSampleDartCode);
+  }
+  final DiffTextPair? pair = _sampleDiffs[change.name];
+  if (pair != null) {
+    return pair;
+  }
+  return const DiffTextPair(left: kSampleDartCode, right: kSampleDartCode);
 });

@@ -4,6 +4,7 @@ import 'package:flutter_highlight/themes/github.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:highlight/languages/dart.dart';
 
+import 'package:chunkdiff_core/chunkdiff_core.dart';
 import '../providers.dart';
 
 class DiffView extends ConsumerStatefulWidget {
@@ -20,28 +21,19 @@ class _DiffViewState extends ConsumerState<DiffView> {
   @override
   void initState() {
     super.initState();
+    final DiffTextPair initialPair = ref.read(selectedDiffTextProvider);
     _leftController = CodeController(
-      text: ref.read(leftDiffCodeProvider),
+      text: initialPair.left,
       language: dart,
-    )..addListener(_onLeftChanged);
+    );
     _rightController = CodeController(
-      text: ref.read(rightDiffCodeProvider),
+      text: initialPair.right,
       language: dart,
-    )..addListener(_onRightChanged);
-  }
-
-  void _onLeftChanged() {
-    ref.read(leftDiffCodeProvider.notifier).state = _leftController.text;
-  }
-
-  void _onRightChanged() {
-    ref.read(rightDiffCodeProvider.notifier).state = _rightController.text;
+    );
   }
 
   @override
   void dispose() {
-    _leftController.removeListener(_onLeftChanged);
-    _rightController.removeListener(_onRightChanged);
     _leftController.dispose();
     _rightController.dispose();
     super.dispose();
@@ -49,21 +41,116 @@ class _DiffViewState extends ConsumerState<DiffView> {
 
   @override
   Widget build(BuildContext context) {
+    final DiffTextPair pair = ref.watch(selectedDiffTextProvider);
+    if (_leftController.text != pair.left) {
+      _leftController.text = pair.left;
+    }
+    if (_rightController.text != pair.right) {
+      _rightController.text = pair.right;
+    }
+
+    final List<SymbolChange> changes = ref.watch(symbolChangesProvider);
+    final int selectedIndex = ref.watch(selectedChangeIndexProvider);
+
     return Row(
       children: [
-        Expanded(
-          child: _DiffPane(
-            title: 'Left (old)',
-            controller: _leftController,
-            backgroundColor: const Color(0xFFFFF3F3),
+        SizedBox(
+          width: 260,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Changes',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.arrow_upward),
+                    tooltip: 'Previous change',
+                    onPressed: selectedIndex > 0
+                        ? () {
+                            ref
+                                .read(selectedChangeIndexProvider.notifier)
+                                .state = selectedIndex - 1;
+                          }
+                        : null,
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.arrow_downward),
+                    tooltip: 'Next change',
+                    onPressed: selectedIndex < changes.length - 1
+                        ? () {
+                            ref
+                                .read(selectedChangeIndexProvider.notifier)
+                                .state = selectedIndex + 1;
+                          }
+                        : null,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Expanded(
+                child: ListView.separated(
+                  itemCount: changes.length,
+                  separatorBuilder: (_, __) => const Divider(height: 1),
+                  itemBuilder: (BuildContext _, int index) {
+                    final SymbolChange change = changes[index];
+                    final bool selected = index == selectedIndex;
+                    return ListTile(
+                      dense: true,
+                      selected: selected,
+                      title: Text(
+                        change.name,
+                        style: TextStyle(
+                          fontWeight:
+                              selected ? FontWeight.w600 : FontWeight.w400,
+                        ),
+                      ),
+                      subtitle: Text(
+                        change.kind.name,
+                        style: TextStyle(
+                          color: Colors.grey[700],
+                        ),
+                      ),
+                      onTap: () => ref
+                          .read(selectedChangeIndexProvider.notifier)
+                          .state = index,
+                    );
+                  },
+                ),
+              ),
+            ],
           ),
         ),
         const SizedBox(width: 12),
         Expanded(
-          child: _DiffPane(
-            title: 'Right (new)',
-            controller: _rightController,
-            backgroundColor: const Color(0xFFF2FFF4),
+          child: Column(
+            children: [
+              Expanded(
+                child: _DiffPane(
+                  title: 'Left (old)',
+                  controller: _leftController,
+                  backgroundColor: const Color(0xFFFFF3F3),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            children: [
+              Expanded(
+                child: _DiffPane(
+                  title: 'Right (new)',
+                  controller: _rightController,
+                  backgroundColor: const Color(0xFFF2FFF4),
+                ),
+              ),
+            ],
           ),
         ),
       ],
