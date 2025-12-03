@@ -28,6 +28,26 @@ class CodeChunk {
   });
 }
 
+class CodeHunk {
+  final String filePath;
+  final int oldStart;
+  final int oldCount;
+  final int newStart;
+  final int newCount;
+  final String leftText;
+  final String rightText;
+
+  const CodeHunk({
+    required this.filePath,
+    required this.oldStart,
+    required this.oldCount,
+    required this.newStart,
+    required this.newCount,
+    required this.leftText,
+    required this.rightText,
+  });
+}
+
 class SymbolChange {
   final String name;
   final SymbolKind kind;
@@ -186,6 +206,48 @@ void main() {
   print(greeter.greet('World', excited: true));
 }
 ''',
+    ),
+  ];
+}
+
+List<CodeHunk> dummyCodeHunks() {
+  return const <CodeHunk>[
+    CodeHunk(
+      filePath: 'lib/src/example.dart',
+      oldStart: 3,
+      oldCount: 4,
+      newStart: 3,
+      newCount: 6,
+      leftText: r'''
+class Greeter {
+  String greet(String name) {
+    return 'Hello, $name';
+  }
+}''',
+      rightText: r'''
+class Greeter {
+  String greet(String name, {bool excited = false}) {
+    final String msg = 'Hello, $name';
+    return excited ? '$msg!' : msg;
+  }
+}''',
+    ),
+    CodeHunk(
+      filePath: 'lib/main.dart',
+      oldStart: 1,
+      oldCount: 5,
+      newStart: 1,
+      newCount: 6,
+      leftText: r'''
+void main() {
+  final Greeter greeter = Greeter();
+  print(greeter.greet('World'));
+}''',
+      rightText: r'''
+void main() {
+  final Greeter greeter = Greeter();
+  print(greeter.greet('World', excited: true));
+}''',
     ),
   ];
 }
@@ -445,6 +507,105 @@ Future<List<CodeChunk>> loadChunkDiffs(
   }
 
   return chunks;
+}
+
+Future<List<CodeHunk>> loadHunkDiffs(
+  String repoPath,
+  String leftRef,
+  String rightRef, {
+  bool dartOnly = true,
+}) async {
+  final bool repoOk = await isGitRepo(repoPath);
+  if (!repoOk) {
+    return <CodeHunk>[];
+  }
+
+  final String? root = await gitRoot(repoPath);
+  final String repoRoot = root ?? repoPath;
+  final bool isSubdir = root != null && !p.equals(p.normalize(repoPath), root);
+  final String? relativeScope =
+      isSubdir ? p.relative(repoPath, from: repoRoot) : null;
+
+  final List<String> files = await listChangedFilesInScope(
+    repoRoot,
+    leftRef,
+    rightRef,
+    relativeScope,
+  );
+  final Iterable<String> filtered = dartOnly
+      ? files.where((String f) => f.endsWith('.dart'))
+      : files;
+
+  final List<CodeHunk> hunks = <CodeHunk>[];
+  for (final String file in filtered) {
+    final String? leftContent = await fileContentAtRef(repoRoot, leftRef, file);
+    final String? rightContent =
+        await fileContentAtRef(repoRoot, rightRef, file);
+    final List<String> leftLines =
+        leftContent != null ? leftContent.split('\n') : <String>[];
+    final List<String> rightLines =
+        rightContent != null ? rightContent.split('\n') : <String>[];
+
+    final List<_Hunk> parsed =
+        await _parseGitHunks(repoRoot, leftRef, rightRef, file);
+    if (parsed.isEmpty) {
+      // New file or removed file: treat whole file as one hunk.
+      if (rightContent != null && leftContent == null) {
+        final int newCount = rightLines.length;
+        hunks.add(
+          CodeHunk(
+            filePath: file,
+            oldStart: 0,
+            oldCount: 0,
+            newStart: 1,
+            newCount: newCount,
+            leftText: '',
+            rightText: rightLines.join('\n'),
+          ),
+        );
+      } else if (leftContent != null && rightContent == null) {
+        final int oldCount = leftLines.length;
+        hunks.add(
+          CodeHunk(
+            filePath: file,
+            oldStart: 1,
+            oldCount: oldCount,
+            newStart: 0,
+            newCount: 0,
+            leftText: leftLines.join('\n'),
+            rightText: '',
+          ),
+        );
+      }
+      continue;
+    }
+
+    for (final _Hunk h in parsed) {
+      final int oldStart = h.oldStart;
+      final int oldEnd = h.oldStart + h.oldCount - 1;
+      final int newStart = h.newStart;
+      final int newEnd = h.newStart + h.newCount - 1;
+
+      final String leftSnippet =
+          _sliceLines(leftLines, oldStart, oldEnd).join('\n');
+      final String rightSnippet =
+          _sliceLines(rightLines, newStart, newEnd).join('\n');
+
+      hunks.add(
+        CodeHunk(
+          filePath: file,
+          oldStart: oldStart,
+          oldCount: h.oldCount,
+          newStart: newStart,
+          newCount: h.newCount,
+          leftText: leftSnippet,
+          rightText: rightSnippet,
+        ),
+      );
+    }
+  }
+
+  return hunks;
 }
 
 class _Hunk {

@@ -1,11 +1,9 @@
-import 'package:code_text_field/code_text_field.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_highlight/themes/monokai-sublime.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:highlight/languages/dart.dart';
 
 import 'package:chunkdiff_core/chunkdiff_core.dart';
 import '../providers.dart';
+import 'files_list.dart';
 
 class DiffView extends ConsumerStatefulWidget {
   const DiffView({super.key});
@@ -16,24 +14,11 @@ class DiffView extends ConsumerStatefulWidget {
 
 class _DiffViewState extends ConsumerState<DiffView>
     with SingleTickerProviderStateMixin {
-  late final CodeController _leftController;
-  late final CodeController _rightController;
   late final AnimationController _shimmerController;
 
   @override
   void initState() {
     super.initState();
-    final SymbolDiff? initialDiff = ref.read(selectedDiffProvider);
-    final String initialLeft = initialDiff?.leftSnippet ?? '';
-    final String initialRight = initialDiff?.rightSnippet ?? '';
-    _leftController = CodeController(
-      text: initialLeft,
-      language: dart,
-    );
-    _rightController = CodeController(
-      text: initialRight,
-      language: dart,
-    );
     _shimmerController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1400),
@@ -42,8 +27,6 @@ class _DiffViewState extends ConsumerState<DiffView>
 
   @override
   void dispose() {
-    _leftController.dispose();
-    _rightController.dispose();
     _shimmerController.dispose();
     super.dispose();
   }
@@ -52,34 +35,21 @@ class _DiffViewState extends ConsumerState<DiffView>
   Widget build(BuildContext context) {
     final AsyncValue<List<SymbolDiff>> asyncDiffs =
         ref.watch(symbolDiffsProvider);
-    final AsyncValue<List<CodeChunk>> asyncChunks =
-        ref.watch(chunkDiffsProvider);
-    final SymbolDiff? diff = ref.watch(selectedDiffProvider);
-    final String left = _sanitizeText(diff?.leftSnippet ?? _leftController.text);
-    final String right =
-        _sanitizeText(diff?.rightSnippet ?? _rightController.text);
-    if (_leftController.text != left) {
-      _leftController.text = left;
-    }
-    if (_rightController.text != right) {
-      _rightController.text = right;
-    }
-
+    final AsyncValue<List<CodeHunk>> asyncHunks =
+        ref.watch(hunkDiffsProvider);
     final List<SymbolChange> changes = ref.watch(symbolChangesProvider);
     final int selectedIndex = ref.watch(selectedChangeIndexProvider);
     final String leftRef = ref.watch(leftRefProvider);
     final String rightRef = ref.watch(rightRefProvider);
     final SymbolChange? selectedChange = ref.watch(selectedChangeProvider);
-    final bool hasChunkData =
-        asyncChunks.hasValue && (asyncChunks.value?.isNotEmpty ?? false);
-    final bool isLoading = (asyncDiffs.isLoading || asyncChunks.isLoading) &&
-        !hasChunkData &&
+    final bool hasHunkData =
+        asyncHunks.hasValue && (asyncHunks.value?.isNotEmpty ?? false);
+    final bool isLoading = (asyncDiffs.isLoading || asyncHunks.isLoading) &&
+        !hasHunkData &&
         changes.isEmpty;
-    final bool hasChanges = (changes.isNotEmpty && !isLoading) || hasChunkData;
+    final bool hasChanges = (changes.isNotEmpty && !isLoading) || hasHunkData;
     final ChangesTab activeTab = ref.watch(changesTabProvider);
     final int selectedChunkIndex = ref.watch(selectedChunkIndexProvider);
-    final SymbolChange? selectedFileChange =
-        activeTab == ChangesTab.files ? selectedChange : null;
 
     return Row(
       children: [
@@ -106,52 +76,32 @@ class _DiffViewState extends ConsumerState<DiffView>
                           _SkeletonListItem(animation: _shimmerController),
                         ],
                       )
-                        : hasChanges
+                    : hasChanges
                         ? (activeTab == ChangesTab.files
-                            ? ListView.separated(
-                                itemCount: changes.length,
-                                separatorBuilder: (_, __) =>
-                                    const Divider(height: 1),
-                                itemBuilder: (BuildContext _, int index) {
-                                  final SymbolChange change = changes[index];
-                                  final bool selected = index == selectedIndex;
-                                  return ListTile(
-                                    dense: true,
-                                    selected: selected,
-                                    title: Text(
-                                      change.name,
-                                      style: TextStyle(
-                                        fontWeight: selected
-                                            ? FontWeight.w600
-                                            : FontWeight.w400,
-                                      ),
-                                    ),
-                                    subtitle: Text(
-                                      change.kind.name,
-                                      style: TextStyle(
-                                        color: Colors.grey[700],
-                                      ),
-                                    ),
-                                    onTap: () => ref
-                                        .read(selectedChangeIndexProvider
-                                            .notifier)
-                                        .state = index,
-                                  );
-                                },
+                            ? FilesList(
+                                changes: changes,
+                                selectedIndex: selectedIndex,
+                                onSelect: (int idx) => ref
+                                    .read(
+                                        selectedChangeIndexProvider.notifier)
+                                    .state = idx,
                               )
-                            : _ChunkList(
-                                asyncChunks: asyncChunks,
-                                selectedChunkIndex: selectedChunkIndex,
-                                onSelect: (int idx) {
-                                  ref
-                                      .read(selectedChunkIndexProvider.notifier)
-                                      .state = idx;
-                                  ref
-                                      .read(
-                                          settingsControllerProvider.notifier)
-                                      .setSelectedChunkIndex(idx);
-                                },
-                              ))
+                            : activeTab == ChangesTab.hunks
+                                ? _HunkList(
+                                    asyncHunks: asyncHunks,
+                                    selectedIndex: selectedChunkIndex,
+                                    onSelect: (int idx) {
+                                      ref
+                                          .read(selectedChunkIndexProvider
+                                              .notifier)
+                                          .state = idx;
+                                      ref
+                                          .read(settingsControllerProvider
+                                              .notifier)
+                                          .setSelectedChunkIndex(idx);
+                                    },
+                                  )
+                                : const _ChunksPlaceholder())
                         : Center(
                             child: Text(
                               'No changes for $leftRef → $rightRef',
@@ -193,9 +143,9 @@ class _DiffViewState extends ConsumerState<DiffView>
                           ),
                         ],
                       )
-                    : _ChunkDiffView(
-                        asyncChunks: asyncChunks,
-                        selectedChunkIndex: selectedChunkIndex,
+                    : _HunkDiffView(
+                        asyncHunks: asyncHunks,
+                        selectedIndex: selectedChunkIndex,
                         selectedFileChange: selectedChange,
                         activeTab: activeTab,
                       ),
@@ -331,6 +281,11 @@ class _TabSwitcher extends StatelessWidget {
           onTap: () => onChanged(ChangesTab.files),
         ),
         _TabChip(
+          label: 'Hunks',
+          selected: activeTab == ChangesTab.hunks,
+          onTap: () => onChanged(ChangesTab.hunks),
+        ),
+        _TabChip(
           label: 'Chunks',
           selected: activeTab == ChangesTab.chunks,
           onTap: () => onChanged(ChangesTab.chunks),
@@ -370,21 +325,20 @@ class _TabChip extends StatelessWidget {
   }
 }
 
-class _ChunkList extends StatelessWidget {
-  const _ChunkList({
-    required this.asyncChunks,
-    required this.selectedChunkIndex,
+class _HunkList extends StatelessWidget {
+  const _HunkList({
+    required this.asyncHunks,
+    required this.selectedIndex,
     required this.onSelect,
   });
 
-  final AsyncValue<List<CodeChunk>> asyncChunks;
-  final int selectedChunkIndex;
+  final AsyncValue<List<CodeHunk>> asyncHunks;
+  final int selectedIndex;
   final ValueChanged<int> onSelect;
 
   @override
   Widget build(BuildContext context) {
-    final List<CodeChunk> chunks =
-        asyncChunks.value ?? const <CodeChunk>[];
+    final List<CodeHunk> chunks = asyncHunks.value ?? const <CodeHunk>[];
 
     if (chunks.isEmpty) {
       return Center(
@@ -403,14 +357,16 @@ class _ChunkList extends StatelessWidget {
       itemCount: chunks.length,
       separatorBuilder: (_, __) => const SizedBox(height: 12),
       itemBuilder: (BuildContext context, int index) {
-        final CodeChunk chunk = chunks[index];
-        final bool selected = index == selectedChunkIndex;
+        final CodeHunk chunk = chunks[index];
+        final bool selected = index == selectedIndex;
         return ListTile(
           dense: true,
           selected: selected,
           title: Text(chunk.filePath),
-          subtitle: Text('Old ${chunk.oldStart}-${chunk.oldEnd} → '
-              'New ${chunk.newStart}-${chunk.newEnd}'),
+          subtitle: Text(
+            'Old ${chunk.oldStart}-${chunk.oldStart + chunk.oldCount - 1} → '
+            'New ${chunk.newStart}-${chunk.newStart + chunk.newCount - 1}',
+          ),
           onTap: () => onSelect(index),
         );
       },
@@ -418,22 +374,39 @@ class _ChunkList extends StatelessWidget {
   }
 }
 
-class _ChunkDiffView extends StatelessWidget {
-  const _ChunkDiffView({
-    required this.asyncChunks,
-    required this.selectedChunkIndex,
+class _ChunksPlaceholder extends StatelessWidget {
+  const _ChunksPlaceholder();
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Text(
+        'Chunks view coming soon.',
+        style: Theme.of(context)
+            .textTheme
+            .bodyMedium
+            ?.copyWith(color: Colors.grey[400]),
+      ),
+    );
+  }
+}
+
+class _HunkDiffView extends StatelessWidget {
+  const _HunkDiffView({
+    required this.asyncHunks,
+    required this.selectedIndex,
     required this.selectedFileChange,
     required this.activeTab,
   });
 
-  final AsyncValue<List<CodeChunk>> asyncChunks;
-  final int selectedChunkIndex;
+  final AsyncValue<List<CodeHunk>> asyncHunks;
+  final int selectedIndex;
   final SymbolChange? selectedFileChange;
   final ChangesTab activeTab;
 
   @override
   Widget build(BuildContext context) {
-    final List<CodeChunk> all = asyncChunks.value ?? const <CodeChunk>[];
+    final List<CodeHunk> all = asyncHunks.value ?? const <CodeHunk>[];
     if (all.isEmpty) {
       return Center(
         child: Text(
@@ -445,73 +418,63 @@ class _ChunkDiffView extends StatelessWidget {
         ),
       );
     }
-    if (activeTab == ChangesTab.chunks) {
-      final int clampedIndex = selectedChunkIndex.clamp(0, all.length - 1);
-      final CodeChunk chunk = all[clampedIndex];
-      final String leftText = _sanitizeText(chunk.leftText);
-      final String rightText = _sanitizeText(chunk.rightText);
-      return Row(
-        children: [
-          Expanded(
-            child: _DiffPane(
-              text: leftText,
-              backgroundColor: const Color(0xFF272822),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: _DiffPane(
-              text: rightText,
-              backgroundColor: const Color(0xFF272822),
-            ),
-          ),
-        ],
-      );
+
+    if (activeTab == ChangesTab.hunks) {
+      final int clampedIndex = selectedIndex.clamp(0, all.length - 1);
+      final CodeHunk hunk = all[clampedIndex];
+      return _buildPanePair(hunk.leftText, hunk.rightText);
     }
 
-    final String? targetFile =
-        selectedFileChange?.beforePath ?? selectedFileChange?.afterPath;
-    final List<CodeChunk> filtered = targetFile == null
-        ? all
-        : all.where((CodeChunk c) => c.filePath == targetFile).toList();
-    if (filtered.isEmpty) {
-      return Center(
-        child: Text(
-          'No diff content to display.',
-          style: Theme.of(context)
-              .textTheme
-              .bodyMedium
-              ?.copyWith(color: Colors.grey[400]),
-        ),
-      );
-    }
-
-    return ListView.separated(
-      padding: EdgeInsets.zero,
-      itemCount: filtered.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 12),
-      itemBuilder: (BuildContext context, int index) {
-        final CodeChunk chunk = filtered[index];
-        final String leftText = _sanitizeText(chunk.leftText);
-        final String rightText = _sanitizeText(chunk.rightText);
-        return Row(
-          children: [
-            Expanded(
-              child: _DiffPane(
-                text: leftText,
-                backgroundColor: const Color(0xFF272822),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: _DiffPane(
-                text: rightText,
-                backgroundColor: const Color(0xFF272822),
-              ),
-            ),
-          ],
+    if (activeTab == ChangesTab.files) {
+      final String? targetFile =
+          selectedFileChange?.beforePath ?? selectedFileChange?.afterPath;
+      final List<CodeHunk> filtered = targetFile == null
+          ? all
+          : all.where((CodeHunk h) => h.filePath == targetFile).toList();
+      if (filtered.isEmpty) {
+        return Center(
+          child: Text(
+            'No diff content to display.',
+            style: Theme.of(context)
+                .textTheme
+                .bodyMedium
+                ?.copyWith(color: Colors.grey[400]),
+          ),
         );
-      },
+      }
+      return ListView.separated(
+        padding: EdgeInsets.zero,
+        itemCount: filtered.length,
+        separatorBuilder: (_, __) => const SizedBox(height: 12),
+        itemBuilder: (BuildContext context, int index) {
+          final CodeHunk hunk = filtered[index];
+          return _buildPanePair(hunk.leftText, hunk.rightText);
+        },
+      );
+    }
+
+    return const _ChunksPlaceholder();
+  }
+
+  Widget _buildPanePair(String left, String right) {
+    final String leftText = _sanitizeText(left);
+    final String rightText = _sanitizeText(right);
+    return Row(
+      children: [
+        Expanded(
+          child: _DiffPane(
+            text: leftText,
+            backgroundColor: const Color(0xFF272822),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: _DiffPane(
+            text: rightText,
+            backgroundColor: const Color(0xFF272822),
+          ),
+        ),
+      ],
     );
   }
 }
