@@ -11,9 +11,11 @@ class ChunkDiffApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'ChunkDiff',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
-        useMaterial3: true,
+      theme: ThemeData.dark(useMaterial3: true).copyWith(
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: Colors.indigo,
+          brightness: Brightness.dark,
+        ),
       ),
       home: const HomeScreen(),
     );

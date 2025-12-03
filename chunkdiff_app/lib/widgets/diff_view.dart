@@ -1,6 +1,6 @@
 import 'package:code_text_field/code_text_field.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_highlight/themes/github.dart';
+import 'package:flutter_highlight/themes/monokai-sublime.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:highlight/languages/dart.dart';
 
@@ -190,7 +190,7 @@ class _DiffPane extends StatelessWidget {
             child: Padding(
               padding: const EdgeInsets.all(8),
               child: CodeTheme(
-                data: CodeThemeData(styles: githubTheme),
+                data: CodeThemeData(styles: monokaiSublimeTheme),
                 child: CodeField(
                   controller: controller,
                   textStyle: const TextStyle(
