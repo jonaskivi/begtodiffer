@@ -675,6 +675,10 @@ List<CodeHunk> _parseGitHunks(String diffOutput) {
       }
       continue;
     }
+    // Skip file headers and index metadata.
+    if (line.startsWith('+++ ') || line.startsWith('--- ') || line.startsWith('index ')) {
+      continue;
+    }
     if (line.startsWith('@@')) {
       flushHunk();
       final RegExpMatch? match =

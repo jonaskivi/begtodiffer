@@ -246,9 +246,12 @@ class _RepoToolbarState extends ConsumerState<RepoToolbar> {
 
   void _refreshAll(WidgetRef ref) {
     ref.read(selectedChangeIndexProvider.notifier).state = 0;
+    ref.read(selectedChunkIndexProvider.notifier).state = 0;
     ref.invalidate(repoValidationProvider);
     ref.invalidate(refOptionsProvider);
     ref.invalidate(symbolDiffsProvider);
     ref.invalidate(gitAccessProvider);
+    ref.invalidate(hunkDiffsProvider);
+    ref.invalidate(chunkDiffsProvider);
   }
 }
