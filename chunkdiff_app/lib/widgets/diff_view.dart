@@ -44,8 +44,9 @@ class _DiffViewState extends ConsumerState<DiffView> {
   @override
   Widget build(BuildContext context) {
     final SymbolDiff? diff = ref.watch(selectedDiffProvider);
-    final String left = diff?.leftSnippet ?? _leftController.text;
-    final String right = diff?.rightSnippet ?? _rightController.text;
+    final String left = _sanitizeText(diff?.leftSnippet ?? _leftController.text);
+    final String right =
+        _sanitizeText(diff?.rightSnippet ?? _rightController.text);
     if (_leftController.text != left) {
       _leftController.text = left;
     }
@@ -290,4 +291,14 @@ class _DiffPane extends StatelessWidget {
       ],
     );
   }
+}
+
+String _sanitizeText(String input) {
+  final StringBuffer buffer = StringBuffer();
+  for (final int rune in input.runes) {
+    if (rune >= 0 && rune <= 0x10FFFF) {
+      buffer.writeCharCode(rune);
+    }
+  }
+  return buffer.toString();
 }

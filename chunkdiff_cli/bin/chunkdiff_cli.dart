@@ -5,8 +5,8 @@ import 'package:chunkdiff_core/chunkdiff_core.dart';
 Future<void> main(List<String> arguments) async {
   final Map<String, String> args = _parseArgs(arguments);
   final String gitFolder = args['git-folder'] ?? '(not provided)';
-  final String leftRef = args['left'] ?? 'HEAD~1';
-  final String rightRef = args['right'] ?? 'HEAD';
+  final String leftRef = args['left'] ?? 'HEAD';
+  final String rightRef = args['right'] ?? kWorktreeRef;
 
   stdout.writeln('ChunkDiff CLI');
   stdout.writeln('  Git folder: $gitFolder');

@@ -99,30 +99,30 @@ const List<String> kStubRefs = <String>['HEAD', 'HEAD~1', 'main'];
 final FutureProvider<List<String>> refOptionsProvider =
     FutureProvider<List<String>>((Ref ref) async {
   if (kForceMockData) {
-    return kStubRefs;
+    return <String>{...kStubRefs, kWorktreeRef}.toList();
   }
   final AppSettings settings =
       await ref.watch(settingsControllerProvider.future);
   final String? path = settings.gitFolder;
   if (path == null || path.isEmpty) {
-    return kStubRefs;
+    return <String>{...kStubRefs, kWorktreeRef}.toList();
   }
   try {
     final List<String> refs = await listGitRefs(path);
     if (refs.isNotEmpty) {
-      return refs.toSet().toList();
+      return <String>{...refs, kWorktreeRef}.toList();
     }
   } catch (_) {
     // fall back to stub refs
   }
-  return kStubRefs;
+  return <String>{...kStubRefs, kWorktreeRef}.toList();
 });
 
 final StateProvider<String> leftRefProvider =
-    StateProvider<String>((Ref ref) => 'HEAD~1');
+    StateProvider<String>((Ref ref) => 'HEAD');
 
 final StateProvider<String> rightRefProvider =
-    StateProvider<String>((Ref ref) => 'HEAD');
+    StateProvider<String>((Ref ref) => kWorktreeRef);
 
 final FutureProvider<bool> gitAccessProvider =
     FutureProvider<bool>((Ref ref) async {
