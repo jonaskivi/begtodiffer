@@ -32,12 +32,19 @@ class ChunkDiffView extends StatelessWidget {
     final int clamped = selectedIndex.clamp(0, chunks.length - 1);
     final CodeChunk chunk = chunks[clamped];
     final String shortLeft = p.basename(chunk.filePath);
-    final String shortRight = p.basename(chunk.filePath);
+    final String shortRight = p.basename(chunk.rightFilePath);
+    final bool moved = chunk.filePath != chunk.rightFilePath;
+    final String header = moved
+        ? '${chunk.name} • ${chunk.filePath} → ${chunk.rightFilePath}'
+        : '${chunk.name} • ${chunk.filePath} (lines ${chunk.oldStart}-${chunk.oldEnd})';
     return DiffLinesView(
       lines: chunk.lines,
-      header:
-          '${chunk.name} • ${chunk.filePath} (lines ${chunk.oldStart}-${chunk.oldEnd})',
-      subtitle: chunk.ignored ? 'Ignored' : null,
+      header: header,
+      subtitle: chunk.ignored
+          ? 'Ignored'
+          : moved
+              ? 'Moved'
+              : null,
       leftLabel: shortLeft,
       rightLabel: shortRight,
       scrollable: true,

@@ -10,6 +10,7 @@ const String kWorktreeRef = 'WORKTREE';
 
 class CodeChunk {
   final String filePath;
+  final String rightFilePath;
   final int oldStart;
   final int oldEnd;
   final int newStart;
@@ -23,6 +24,7 @@ class CodeChunk {
 
   const CodeChunk({
     required this.filePath,
+    required this.rightFilePath,
     required this.oldStart,
     required this.oldEnd,
     required this.newStart,
@@ -199,6 +201,7 @@ List<CodeChunk> dummyCodeChunks() {
   return <CodeChunk>[
     CodeChunk(
       filePath: 'lib/src/example.dart',
+      rightFilePath: 'lib/src/example.dart',
       oldStart: 3,
       oldEnd: 8,
       newStart: 3,
@@ -253,6 +256,7 @@ class Greeter {
     ),
     CodeChunk(
       filePath: 'lib/main.dart',
+      rightFilePath: 'lib/main.dart',
       oldStart: 1,
       newStart: 1,
       oldEnd: 5,
@@ -515,7 +519,13 @@ Future<List<CodeChunk>> loadChunkDiffs(
 
   final List<CodeChunk> chunks = <CodeChunk>[];
   for (final CodeHunk hunk in hunks) {
-    final int lookupLine = hunk.oldStart > 0 ? hunk.oldStart : hunk.newStart;
+    int lookupLine = hunk.oldStart > 0 ? hunk.oldStart : hunk.newStart;
+    for (final DiffLine line in hunk.lines) {
+      if (line.status != DiffLineStatus.context) {
+        lookupLine = line.leftNumber ?? line.rightNumber ?? lookupLine;
+        break;
+      }
+    }
     String? fileText = await readFile(hunk.filePath, leftRef);
     String usedRef = leftRef;
     if (fileText == null || fileText.isEmpty) {
@@ -525,6 +535,7 @@ Future<List<CodeChunk>> loadChunkDiffs(
     if (fileText == null || fileText.isEmpty) {
       chunks.add(CodeChunk(
         filePath: hunk.filePath,
+        rightFilePath: hunk.filePath,
         oldStart: hunk.oldStart,
         oldEnd: hunk.oldEnd,
         newStart: hunk.newStart,
@@ -540,12 +551,41 @@ Future<List<CodeChunk>> loadChunkDiffs(
     }
 
     final List<String> fileLines = fileText.split('\n');
-    final _ParentInfo? parent =
+    _ParentInfo? parent =
         _findParent(fileLines, lookupLine == 0 ? 1 : lookupLine);
+
+    // If nothing found, scan forward within the hunk for a definition line and retry.
+    if (parent == null) {
+      final RegExp classRe = RegExp(r'^\s*class\s+(\w+)');
+      final RegExp enumRe = RegExp(r'^\s*enum\s+(\w+)');
+      final RegExp funcRe = RegExp(r'^\s*[A-Za-z0-9_<>\[\]\?]+\s+(\w+)\s*\(');
+      for (final DiffLine line in hunk.lines) {
+        final String candidate =
+            line.leftText.isNotEmpty ? line.leftText : line.rightText;
+        if (candidate.isEmpty) {
+          continue;
+        }
+        final bool looksLikeDecl =
+            classRe.hasMatch(candidate) || enumRe.hasMatch(candidate) || funcRe.hasMatch(candidate);
+        if (!looksLikeDecl) {
+          continue;
+        }
+        final int? lineNumber = line.leftNumber ?? line.rightNumber;
+        if (lineNumber != null) {
+          final _ParentInfo? candidateParent = _findParent(fileLines, lineNumber);
+          if (candidateParent != null &&
+              _containsAnyChange(candidateParent, hunk.lines)) {
+            parent = candidateParent;
+            break;
+          }
+        }
+      }
+    }
 
     if (parent == null) {
       chunks.add(CodeChunk(
         filePath: hunk.filePath,
+        rightFilePath: hunk.filePath,
         oldStart: hunk.oldStart,
         oldEnd: hunk.oldEnd,
         newStart: hunk.newStart,
@@ -565,17 +605,37 @@ Future<List<CodeChunk>> loadChunkDiffs(
     final List<String> parentLines =
         fileLines.sublist(startIdx, endIdx + 1).toList();
     final String leftText = parentLines.join('\n');
-    final List<DiffLine> chunkLines =
-        _buildChunkLines(parentLines, parent.startLine, hunk.lines);
+    final bool removalOnly = _isRemovalOnly(hunk.lines);
+
+    _ParentMatch? moved;
+    if (removalOnly) {
+      moved = await _findMovedParent(
+        repo: repo,
+        rightRef: rightRef,
+        parentName: parent.name,
+        hunks: hunks,
+        rightCache: rightCache,
+      );
+    }
+
+    final List<DiffLine> chunkLines = moved == null
+        ? _buildChunkLines(parentLines, parent.startLine, hunk.lines)
+        : _alignParentLines(
+            leftLines: parentLines,
+            leftStart: parent.startLine,
+            rightLines: moved.rightLines,
+            rightStart: moved.info.startLine,
+          );
 
     chunks.add(CodeChunk(
       filePath: hunk.filePath,
+      rightFilePath: moved?.filePath ?? hunk.filePath,
       oldStart: parent.startLine,
       oldEnd: parent.endLine,
-      newStart: hunk.newStart,
-      newEnd: hunk.newEnd,
+      newStart: moved?.info.startLine ?? hunk.newStart,
+      newEnd: moved?.info.endLine ?? hunk.newEnd,
       leftText: leftText,
-      rightText: usedRef == leftRef ? '' : leftText,
+      rightText: moved == null ? (usedRef == leftRef ? '' : leftText) : moved.rightText,
       name: parent.name,
       kind: parent.kind,
       ignored: false,
@@ -783,32 +843,51 @@ _ParentInfo? _findParent(List<String> lines, int startLine) {
   String? name;
   SymbolKind kind = SymbolKind.other;
 
-  for (int i = startIdx; i >= 0; i--) {
-    final String line = lines[i];
-    final RegExp classRe = RegExp(r'^\s*class\s+(\w+)');
-    final RegExp enumRe = RegExp(r'^\s*enum\s+(\w+)');
-    final RegExp funcRe = RegExp(r'^\s*[A-Za-z0-9_<>\[\]\?]+\s+(\w+)\s*\(');
+  final RegExp classRe = RegExp(r'^\s*class\s+(\w+)');
+  final RegExp enumRe = RegExp(r'^\s*enum\s+(\w+)');
+  final RegExp funcRe = RegExp(r'^\s*[A-Za-z0-9_<>\[\]\?]+\s+(\w+)\s*\(');
 
-    final RegExpMatch? classMatch = classRe.firstMatch(line);
-    final RegExpMatch? enumMatch = enumRe.firstMatch(line);
-    final RegExpMatch? funcMatch = funcRe.firstMatch(line);
-    if (classMatch != null) {
-      name = classMatch.group(1)!;
-      kind = SymbolKind.classType;
-      foundIdx = i;
-      break;
-    }
-    if (enumMatch != null) {
-      name = enumMatch.group(1)!;
-      kind = SymbolKind.enumType;
-      foundIdx = i;
-      break;
-    }
-    if (funcMatch != null) {
-      name = funcMatch.group(1)!;
-      kind = SymbolKind.function;
-      foundIdx = i;
-      break;
+  // If the starting line itself declares a parent, use it immediately.
+  final String startLineText = lines[startIdx];
+  final RegExpMatch? startClass = classRe.firstMatch(startLineText);
+  final RegExpMatch? startEnum = enumRe.firstMatch(startLineText);
+  final RegExpMatch? startFunc = funcRe.firstMatch(startLineText);
+  if (startClass != null) {
+    name = startClass.group(1)!;
+    kind = SymbolKind.classType;
+    foundIdx = startIdx;
+  } else if (startEnum != null) {
+    name = startEnum.group(1)!;
+    kind = SymbolKind.enumType;
+    foundIdx = startIdx;
+  } else if (startFunc != null) {
+    name = startFunc.group(1)!;
+    kind = SymbolKind.function;
+    foundIdx = startIdx;
+  } else {
+    for (int i = startIdx; i >= 0; i--) {
+      final String line = lines[i];
+      final RegExpMatch? classMatch = classRe.firstMatch(line);
+      final RegExpMatch? enumMatch = enumRe.firstMatch(line);
+      final RegExpMatch? funcMatch = funcRe.firstMatch(line);
+      if (classMatch != null) {
+        name = classMatch.group(1)!;
+        kind = SymbolKind.classType;
+        foundIdx = i;
+        break;
+      }
+      if (enumMatch != null) {
+        name = enumMatch.group(1)!;
+        kind = SymbolKind.enumType;
+        foundIdx = i;
+        break;
+      }
+      if (funcMatch != null) {
+        name = funcMatch.group(1)!;
+        kind = SymbolKind.function;
+        foundIdx = i;
+        break;
+      }
     }
   }
 
@@ -883,6 +962,24 @@ List<DiffLine> _buildChunkLines(
   return result;
 }
 
+bool _containsAnyChange(_ParentInfo parent, List<DiffLine> lines) {
+  for (final DiffLine line in lines) {
+    final int? left = line.leftNumber;
+    final int? right = line.rightNumber;
+    final bool inRange = (left != null &&
+            left >= parent.startLine &&
+            left <= parent.endLine) ||
+        (right != null && right >= parent.startLine && right <= parent.endLine);
+    if (!inRange) {
+      continue;
+    }
+    if (line.status != DiffLineStatus.context) {
+      return true;
+    }
+  }
+  return false;
+}
+
 Future<String?> _readFileForRef(
   String repo,
   String ref,
@@ -906,4 +1003,113 @@ Future<String?> _readFileForRef(
   } catch (_) {
     return null;
   }
+}
+
+class _ParentMatch {
+  final String filePath;
+  final _ParentInfo info;
+  final List<String> rightLines;
+  final String rightText;
+
+  const _ParentMatch({
+    required this.filePath,
+    required this.info,
+    required this.rightLines,
+    required this.rightText,
+  });
+}
+
+Future<_ParentMatch?> _findMovedParent({
+  required String repo,
+  required String rightRef,
+  required String parentName,
+  required List<CodeHunk> hunks,
+  required Map<String, String?> rightCache,
+}) async {
+  final String coreName = parentName.replaceFirst(RegExp(r'^_'), '');
+  final RegExp nameRe = RegExp(r'\b_?${RegExp.escape(coreName)}\b');
+  final Set<String> candidates =
+      hunks.map((CodeHunk h) => h.filePath).toSet();
+
+  for (final String path in candidates) {
+    String? text = rightCache[path];
+    text ??= await _readFileForRef(repo, rightRef, path);
+    if (text == null || text.isEmpty) {
+      continue;
+    }
+    rightCache[path] = text;
+    final List<String> lines = text.split('\n');
+    for (int i = 0; i < lines.length; i++) {
+      if (!nameRe.hasMatch(lines[i])) {
+        continue;
+      }
+      final _ParentInfo? info = _findParent(lines, i + 1);
+      if (info == null) {
+        continue;
+      }
+      final List<String> rightLines =
+          lines.sublist(info.startLine - 1, info.endLine);
+      return _ParentMatch(
+        filePath: path,
+        info: info,
+        rightLines: rightLines,
+        rightText: rightLines.join('\n'),
+      );
+    }
+  }
+
+  return null;
+}
+
+List<DiffLine> _alignParentLines({
+  required List<String> leftLines,
+  required int leftStart,
+  required List<String> rightLines,
+  required int rightStart,
+}) {
+  final List<DiffLine> result = <DiffLine>[];
+  final int leftLen = leftLines.length;
+  final int rightLen = rightLines.length;
+  final int maxLen = leftLen > rightLen ? leftLen : rightLen;
+
+  for (int i = 0; i < maxLen; i++) {
+    final bool hasLeft = i < leftLen;
+    final bool hasRight = i < rightLen;
+    final int? leftNum = hasLeft ? leftStart + i : null;
+    final int? rightNum = hasRight ? rightStart + i : null;
+    final String leftText = hasLeft ? leftLines[i] : '';
+    final String rightText = hasRight ? rightLines[i] : '';
+    DiffLineStatus status;
+    if (hasLeft && hasRight) {
+      status = leftText == rightText
+          ? DiffLineStatus.context
+          : DiffLineStatus.changed;
+    } else if (hasLeft) {
+      status = DiffLineStatus.removed;
+    } else {
+      status = DiffLineStatus.added;
+    }
+    result.add(DiffLine(
+      leftNumber: leftNum,
+      rightNumber: rightNum,
+      leftText: leftText,
+      rightText: rightText,
+      status: status,
+    ));
+  }
+  return result;
+}
+
+bool _isRemovalOnly(List<DiffLine> lines) {
+  bool hasRemoved = false;
+  for (final DiffLine line in lines) {
+    if (line.status == DiffLineStatus.added ||
+        line.status == DiffLineStatus.changed) {
+      return false;
+    }
+    if (line.status == DiffLineStatus.removed) {
+      hasRemoved = true;
+    }
+  }
+  return hasRemoved;
 }
