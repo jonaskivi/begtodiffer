@@ -46,18 +46,24 @@ class _DiffViewState extends ConsumerState<DiffView>
   Widget build(BuildContext context) {
     final AsyncValue<List<SymbolDiff>> asyncDiffs =
         ref.watch(symbolDiffsProvider);
-    final AsyncValue<List<CodeHunk>> asyncHunks =
-        ref.watch(hunkDiffsProvider);
-    final AsyncValue<List<CodeChunk>> asyncChunks =
-        ref.watch(chunkDiffsProvider);
-    final List<SymbolChange> changes = ref.watch(symbolChangesProvider);
+  final AsyncValue<List<CodeHunk>> asyncHunks =
+      ref.watch(hunkDiffsProvider);
+  final AsyncValue<List<CodeChunk>> asyncChunks =
+      ref.watch(chunkDiffsProvider);
+  final List<SymbolChange> changes = ref.watch(symbolChangesProvider);
     final String leftRef = ref.watch(leftRefProvider);
     final String rightRef = ref.watch(rightRefProvider);
     final SymbolChange? selectedChange = ref.watch(selectedChangeProvider);
-    final bool hasHunkData =
-        asyncHunks.hasValue && (asyncHunks.value?.isNotEmpty ?? false);
-    final bool hasChunkData =
-        asyncChunks.hasValue && (asyncChunks.value?.isNotEmpty ?? false);
+  final bool hasHunkData =
+      asyncHunks.hasValue && (asyncHunks.value?.isNotEmpty ?? false);
+  final bool hasChunkData =
+      asyncChunks.hasValue && (asyncChunks.value?.isNotEmpty ?? false);
+  final bool filesLoading =
+      asyncDiffs.isLoading && changes.isEmpty && !asyncDiffs.hasError;
+  final bool hunksLoading =
+      asyncHunks.isLoading && (asyncHunks.value?.isEmpty ?? true);
+  final bool movedLoading =
+      asyncChunks.isLoading && (asyncChunks.value?.isEmpty ?? true);
     final bool isLoading =
         (asyncDiffs.isLoading || asyncHunks.isLoading || asyncChunks.isLoading) &&
             (!hasHunkData && !hasChunkData && changes.isEmpty);
@@ -92,8 +98,123 @@ class _DiffViewState extends ConsumerState<DiffView>
               ),
               const SizedBox(height: 8),
               Expanded(
-                child: isLoading
-                    ? Column(
+                child: Builder(
+                  builder: (BuildContext context) {
+                    if (activeTab == ChangesTab.files) {
+                      if (filesLoading) {
+                        return Column(
+                          mainAxisAlignment: MainAxisAlignment.start,
+                          children: [
+                            _SkeletonListItem(animation: _shimmerController),
+                            const SizedBox(height: 12),
+                            _SkeletonListItem(animation: _shimmerController),
+                            const SizedBox(height: 12),
+                            _SkeletonListItem(animation: _shimmerController),
+                          ],
+                        );
+                      }
+                      if (changes.isEmpty) {
+                        return Center(
+                          child: Text(
+                            'No changes for $leftRef → $rightRef',
+                            style: Theme.of(context)
+                                .textTheme
+                                .bodyMedium
+                                ?.copyWith(color: Colors.grey[400]),
+                            textAlign: TextAlign.center,
+                          ),
+                        );
+                      }
+                      return FilesList(
+                        changes: changes,
+                        selectedIndex: selectedFileIndex,
+                        onSelect: (int idx) {
+                          ref
+                              .read(selectedChangeIndexProvider.notifier)
+                              .state = idx;
+                          ref
+                              .read(settingsControllerProvider.notifier)
+                              .setSelectedFileIndex(idx);
+                        },
+                        onArrowUp: () {
+                          if (selectedFileIndex > 0) {
+                            ref
+                                .read(selectedChangeIndexProvider.notifier)
+                                .state = selectedFileIndex - 1;
+                            ref
+                                .read(settingsControllerProvider.notifier)
+                                .setSelectedFileIndex(selectedFileIndex - 1);
+                          }
+                        },
+                        onArrowDown: () {
+                          if (selectedFileIndex < changes.length - 1) {
+                            ref
+                                .read(selectedChangeIndexProvider.notifier)
+                                .state = selectedFileIndex + 1;
+                            ref
+                                .read(settingsControllerProvider.notifier)
+                                .setSelectedFileIndex(selectedFileIndex + 1);
+                          }
+                        },
+                        focusNode: _filesFocus,
+                        debugSearch: debugSearch,
+                      );
+                    }
+
+                    if (activeTab == ChangesTab.hunks) {
+                      if (hunksLoading) {
+                        return Column(
+                          mainAxisAlignment: MainAxisAlignment.start,
+                          children: [
+                            _SkeletonListItem(animation: _shimmerController),
+                            const SizedBox(height: 12),
+                            _SkeletonListItem(animation: _shimmerController),
+                            const SizedBox(height: 12),
+                            _SkeletonListItem(animation: _shimmerController),
+                          ],
+                        );
+                      }
+                      return _HunkList(
+                        asyncHunks: asyncHunks,
+                        selectedIndex: selectedHunkIndex,
+                        onSelect: (int idx) {
+                          ref
+                              .read(selectedHunkIndexProvider.notifier)
+                              .state = idx;
+                          ref
+                              .read(settingsControllerProvider.notifier)
+                              .setSelectedHunkIndex(idx);
+                        },
+                        onArrowUp: () {
+                          if (selectedHunkIndex > 0) {
+                            ref
+                                .read(selectedHunkIndexProvider.notifier)
+                                .state = selectedHunkIndex - 1;
+                            ref
+                                .read(settingsControllerProvider.notifier)
+                                .setSelectedHunkIndex(selectedHunkIndex - 1);
+                          }
+                        },
+                        onArrowDown: () {
+                          final int maxIndex =
+                              (asyncHunks.value?.length ?? 0) - 1;
+                          if (selectedHunkIndex < maxIndex) {
+                            ref
+                                .read(selectedHunkIndexProvider.notifier)
+                                .state = selectedHunkIndex + 1;
+                            ref
+                                .read(settingsControllerProvider.notifier)
+                                .setSelectedHunkIndex(selectedHunkIndex + 1);
+                          }
+                        },
+                        focusNode: _hunksFocus,
+                        debugSearch: debugSearch,
+                      );
+                    }
+
+                    // moved tab
+                    if (movedLoading) {
+                      return Column(
                         mainAxisAlignment: MainAxisAlignment.start,
                         children: [
                           _SkeletonListItem(animation: _shimmerController),
@@ -102,122 +223,34 @@ class _DiffViewState extends ConsumerState<DiffView>
                           const SizedBox(height: 12),
                           _SkeletonListItem(animation: _shimmerController),
                         ],
-                      )
-                    : hasChanges
-                        ? (activeTab == ChangesTab.files
-                            ? FilesList(
-                                changes: changes,
-                                selectedIndex: selectedFileIndex,
-                                onSelect: (int idx) {
-                                  ref
-                                      .read(
-                                          selectedChangeIndexProvider.notifier)
-                                      .state = idx;
-                                  ref
-                                      .read(settingsControllerProvider.notifier)
-                                      .setSelectedFileIndex(idx);
-                                },
-                                onArrowUp: () {
-                                  if (selectedFileIndex > 0) {
-                                    ref
-                                        .read(selectedChangeIndexProvider
-                                                .notifier)
-                                        .state = selectedFileIndex - 1;
-                                    ref
-                                        .read(
-                                            settingsControllerProvider.notifier)
-                                        .setSelectedFileIndex(
-                                            selectedFileIndex - 1);
-                                  }
-                                },
-                                onArrowDown: () {
-                                  if (selectedFileIndex < changes.length - 1) {
-                                    ref
-                                        .read(selectedChangeIndexProvider
-                                            .notifier)
-                                        .state = selectedFileIndex + 1;
-                                    ref
-                                        .read(
-                                            settingsControllerProvider.notifier)
-                                        .setSelectedFileIndex(
-                                            selectedFileIndex + 1);
-                                  }
-                                },
-                                focusNode: _filesFocus,
-                                debugSearch: debugSearch,
-                              )
-                            : activeTab == ChangesTab.hunks
-                                ? _HunkList(
-                                    asyncHunks: asyncHunks,
-                                    selectedIndex: selectedHunkIndex,
-                                    onSelect: (int idx) {
-                                      ref
-                                          .read(selectedHunkIndexProvider
-                                              .notifier)
-                                          .state = idx;
-                                      ref
-                                          .read(settingsControllerProvider
-                                              .notifier)
-                                          .setSelectedHunkIndex(idx);
-                                    },
-                                    onArrowUp: () {
-                                      if (selectedHunkIndex > 0) {
-                                        ref
-                                            .read(selectedHunkIndexProvider
-                                                .notifier)
-                                            .state = selectedHunkIndex - 1;
-                                        ref
-                                            .read(
-                                                settingsControllerProvider
-                                                    .notifier)
-                                            .setSelectedChunkIndex(
-                                                selectedHunkIndex - 1);
-                                      }
-                                    },
-                                    onArrowDown: () {
-                                      final int maxIndex =
-                                          (asyncHunks.value?.length ?? 0) - 1;
-                                      if (selectedHunkIndex < maxIndex) {
-                                        ref
-                                            .read(selectedHunkIndexProvider
-                                                .notifier)
-                                            .state = selectedHunkIndex + 1;
-                                        ref
-                                            .read(
-                                                settingsControllerProvider
-                                                    .notifier)
-                                            .setSelectedHunkIndex(
-                                                selectedHunkIndex + 1);
-                                      }
-                                    },
-                                    focusNode: _hunksFocus,
-                                    debugSearch: debugSearch,
-                                  )
-                                : _ChunksList(
-                                    asyncChunks: asyncChunks,
-                                    selectedIndex: selectedChunkIndex,
-                                    onSelect: (int idx) {
-                                      ref
-                                          .read(selectedChunkIndexProvider
-                                              .notifier)
-                                          .state = idx;
-                                      ref
-                                          .read(settingsControllerProvider
-                                              .notifier)
-                                          .setSelectedChunkIndex(idx);
-                                    },
-                                    debugSearch: debugSearch,
-                                  ))
-                        : Center(
-                            child: Text(
-                              'No changes for $leftRef → $rightRef',
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .bodyMedium
-                                  ?.copyWith(color: Colors.grey[400]),
-                              textAlign: TextAlign.center,
-                            ),
-                          ),
+                      );
+                    }
+                    if (asyncChunks.value?.isEmpty ?? true) {
+                      return Center(
+                        child: Text(
+                          'No moved symbols for $leftRef → $rightRef',
+                          style: Theme.of(context)
+                              .textTheme
+                              .bodyMedium
+                              ?.copyWith(color: Colors.grey[400]),
+                          textAlign: TextAlign.center,
+                        ),
+                      );
+                    }
+                    return _ChunksList(
+                      asyncChunks: asyncChunks,
+                      selectedIndex: selectedChunkIndex,
+                      onSelect: (int idx) {
+                        ref.read(selectedChunkIndexProvider.notifier).state =
+                            idx;
+                        ref
+                            .read(settingsControllerProvider.notifier)
+                            .setSelectedChunkIndex(idx);
+                      },
+                      debugSearch: debugSearch,
+                    );
+                  },
+                ),
               ),
             ],
           ),
