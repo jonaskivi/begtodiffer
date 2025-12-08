@@ -324,16 +324,16 @@ class _DiffViewState extends ConsumerState<DiffView>
                           ),
                         ],
                       )
-                    : activeTab == ChangesTab.hunks
-                        ? _HunkDiffView(
-                            asyncHunks: asyncHunks,
-                            selectedIndex: selectedChunkIndex,
-                            selectedFileChange: selectedChange,
-                            activeTab: activeTab,
-                          )
-                        : ChunkDiffView(
+                    : activeTab == ChangesTab.moved
+                        ? ChunkDiffView(
                             asyncChunks: asyncChunks,
                             selectedIndex: selectedChunkIndex,
+                          )
+                        : _HunkDiffView(
+                            asyncHunks: asyncHunks,
+                            selectedIndex: selectedHunkIndex,
+                            selectedFileChange: selectedChange,
+                            activeTab: activeTab,
                           ),
               ),
             ],
