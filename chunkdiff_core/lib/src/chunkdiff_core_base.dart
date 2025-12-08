@@ -610,9 +610,10 @@ Future<List<CodeChunk>> loadChunkDiffs(
         fileLines.sublist(startIdx, endIdx + 1).toList();
     final String leftText = parentLines.join('\n');
     final bool removalOnly = _isRemovalOnly(hunk.lines);
+    final bool meaningful = _hasMeaningfulChanges(hunk.lines);
 
     _ParentMatch? moved;
-    if (removalOnly) {
+    if (removalOnly && meaningful) {
       moved = await _findMovedParent(
         repo: repo,
         rightRef: rightRef,
@@ -621,6 +622,24 @@ Future<List<CodeChunk>> loadChunkDiffs(
         rightCache: rightCache,
         debugFilter: debugFilter,
       );
+    }
+
+    if (!meaningful && moved == null) {
+      chunks.add(CodeChunk(
+        filePath: hunk.filePath,
+        rightFilePath: hunk.filePath,
+        oldStart: parent.startLine,
+        oldEnd: parent.endLine,
+        newStart: hunk.newStart,
+        newEnd: hunk.newEnd,
+        leftText: leftText,
+        rightText: leftText,
+        name: parent.name,
+        kind: parent.kind,
+        ignored: true,
+        lines: hunk.lines,
+      ));
+      continue;
     }
 
     final List<DiffLine> chunkLines = moved == null
@@ -640,7 +659,8 @@ Future<List<CodeChunk>> loadChunkDiffs(
       newStart: moved?.info.startLine ?? hunk.newStart,
       newEnd: moved?.info.endLine ?? hunk.newEnd,
       leftText: leftText,
-      rightText: moved == null ? (usedRef == leftRef ? '' : leftText) : moved.rightText,
+      rightText:
+          moved == null ? (usedRef == leftRef ? '' : leftText) : moved.rightText,
       name: parent.name,
       kind: parent.kind,
       ignored: false,
@@ -1164,4 +1184,23 @@ bool _isRemovalOnly(List<DiffLine> lines) {
     }
   }
   return hasRemoved;
+}
+
+bool _hasMeaningfulChanges(List<DiffLine> lines) {
+  final RegExp alnum = RegExp(r'[A-Za-z0-9]');
+  for (final DiffLine line in lines) {
+    if (line.status == DiffLineStatus.context) {
+      continue;
+    }
+    final String text =
+        line.leftText.isNotEmpty ? line.leftText : line.rightText;
+    final String lower = text.toLowerCase();
+    if (lower.contains('import') || lower.contains('export') || lower.contains('include')) {
+      continue;
+    }
+    if (alnum.hasMatch(text)) {
+      return true;
+    }
+  }
+  return false;
 }

@@ -165,13 +165,20 @@ class _SideLabels extends StatelessWidget {
   }
 }
 
-class _DiffLineRow extends StatelessWidget {
+class _DiffLineRow extends StatefulWidget {
   const _DiffLineRow({required this.line});
 
   final DiffLine line;
 
+  @override
+  State<_DiffLineRow> createState() => _DiffLineRowState();
+}
+
+class _DiffLineRowState extends State<_DiffLineRow> {
+  bool _hovered = false;
+
   Color _bgLeft() {
-    switch (line.status) {
+    switch (widget.line.status) {
       case DiffLineStatus.removed:
         return const Color(0xFF3b1f1f);
       case DiffLineStatus.changed:
@@ -182,7 +189,7 @@ class _DiffLineRow extends StatelessWidget {
   }
 
   Color _bgRight() {
-    switch (line.status) {
+    switch (widget.line.status) {
       case DiffLineStatus.added:
         return const Color(0xFF1f3b1f);
       case DiffLineStatus.changed:
@@ -190,6 +197,15 @@ class _DiffLineRow extends StatelessWidget {
       default:
         return Colors.transparent;
     }
+  }
+
+  Color _withHover(Color base) {
+    if (!_hovered) return base;
+    const Color highlight = Color(0x33FFFFFF);
+    if (base == Colors.transparent) {
+      return highlight;
+    }
+    return Color.alphaBlend(highlight, base);
   }
 
   @override
@@ -204,57 +220,61 @@ class _DiffLineRow extends StatelessWidget {
       fontSize: 12,
       color: Colors.grey[500],
     );
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 48,
-            child: Text(
-              line.leftNumber?.toString() ?? '',
-              textAlign: TextAlign.right,
-              style: numberStyle,
-            ),
-          ),
-          const SizedBox(width: 6),
-          Expanded(
-            child: Container(
-              decoration: BoxDecoration(
-                color: _bgLeft(),
-                borderRadius: BorderRadius.circular(6),
-              ),
-              padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 6),
-              child: SelectableText(
-                line.leftText,
-                style: textStyle,
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              width: 48,
+              child: Text(
+                widget.line.leftNumber?.toString() ?? '',
+                textAlign: TextAlign.right,
+                style: numberStyle,
               ),
             ),
-          ),
-          const SizedBox(width: 12),
-          SizedBox(
-            width: 48,
-            child: Text(
-              line.rightNumber?.toString() ?? '',
-              textAlign: TextAlign.right,
-              style: numberStyle,
-            ),
-          ),
-          const SizedBox(width: 6),
-          Expanded(
-            child: Container(
-              decoration: BoxDecoration(
-                color: _bgRight(),
-                borderRadius: BorderRadius.circular(6),
-              ),
-              padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 6),
-              child: SelectableText(
-                line.rightText,
-                style: textStyle,
+            const SizedBox(width: 6),
+            Expanded(
+              child: Container(
+                decoration: BoxDecoration(
+                  color: _withHover(_bgLeft()),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 6),
+                child: SelectableText(
+                  widget.line.leftText,
+                  style: textStyle,
+                ),
               ),
             ),
-          ),
-        ],
+            const SizedBox(width: 12),
+            SizedBox(
+              width: 48,
+              child: Text(
+                widget.line.rightNumber?.toString() ?? '',
+                textAlign: TextAlign.right,
+                style: numberStyle,
+              ),
+            ),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Container(
+                decoration: BoxDecoration(
+                  color: _withHover(_bgRight()),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 6),
+                child: SelectableText(
+                  widget.line.rightText,
+                  style: textStyle,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
