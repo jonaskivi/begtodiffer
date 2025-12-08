@@ -1089,6 +1089,11 @@ Future<_ParentMatch?> _findMovedParent({
         logVerbose('[move] Parent not found at $path:${i + 1}');
         continue;
       }
+      if (info.name.toLowerCase() != coreNameLower) {
+        logVerbose(
+            '[move] Skipping usage at $path:${i + 1} (parent=${info.name})');
+        continue;
+      }
       final List<String> rightLines =
           lines.sublist(info.startLine - 1, info.endLine);
       logVerbose(
