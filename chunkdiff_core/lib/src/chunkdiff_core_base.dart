@@ -570,6 +570,24 @@ Future<List<CodeChunk>> loadChunkDiffs(
     return text;
   }
 
+  // Precompute added-only parent candidates (same-kind matches for move/rename).
+  final List<_ParentCandidate> addedParents = <_ParentCandidate>[];
+  for (final CodeHunk h in hunks) {
+    if (!_isAddedOnly(h.lines)) continue;
+    final String? rightText = await readFile(h.filePath, rightRef);
+    if (rightText == null || rightText.isEmpty) continue;
+    final List<String> lines = rightText.split('\n');
+    final _ParentInfo? p = _findParent(lines, h.newStart == 0 ? 1 : h.newStart);
+    if (p == null) continue;
+    final List<String> body =
+        lines.sublist(p.startLine - 1, p.endLine).toList();
+    addedParents.add(_ParentCandidate(
+      filePath: h.filePath,
+      info: p,
+      lines: body,
+    ));
+  }
+
   final List<CodeChunk> chunks = <CodeChunk>[];
   for (final CodeHunk hunk in hunks) {
     int lookupLine = hunk.oldStart > 0 ? hunk.oldStart : hunk.newStart;
@@ -671,6 +689,24 @@ Future<List<CodeChunk>> loadChunkDiffs(
         rightCache: rightCache,
         debugFilter: debugFilter,
       );
+      // If no direct name match, try structure-based match against added-only parents.
+      if (moved == null) {
+        final String sigLeft = _structureSignature(parentLines);
+        for (final _ParentCandidate cand in addedParents) {
+          if (cand.info.kind != parent.kind) continue;
+          final double sim = _structureSimilarity(sigLeft, _structureSignature(cand.lines));
+          if (sim >= 0.5) {
+            moved = _ParentMatch(
+              filePath: cand.filePath,
+              info: cand.info,
+              rightLines: cand.lines,
+              rightText: cand.lines.join('\n'),
+            );
+            logVerbose('[move] Structure match ${parent.name} -> ${cand.info.name} sim=$sim');
+            break;
+          }
+        }
+      }
     }
 
     if (!meaningful && moved == null) {
@@ -1182,6 +1218,18 @@ Future<_ParentMatch?> _findMovedParent({
   return null;
 }
 
+class _ParentCandidate {
+  final String filePath;
+  final _ParentInfo info;
+  final List<String> lines;
+
+  const _ParentCandidate({
+    required this.filePath,
+    required this.info,
+    required this.lines,
+  });
+}
+
 List<DiffLine> _alignParentLines({
   required List<String> leftLines,
   required int leftStart,
@@ -1235,6 +1283,20 @@ bool _isRemovalOnly(List<DiffLine> lines) {
   return hasRemoved;
 }
 
+bool _isAddedOnly(List<DiffLine> lines) {
+  bool hasAdded = false;
+  for (final DiffLine line in lines) {
+    if (line.status == DiffLineStatus.removed ||
+        line.status == DiffLineStatus.changed) {
+      return false;
+    }
+    if (line.status == DiffLineStatus.added) {
+      hasAdded = true;
+    }
+  }
+  return hasAdded;
+}
+
 bool _hasMeaningfulChanges(List<DiffLine> lines) {
   final RegExp alnum = RegExp(r'[A-Za-z0-9]');
   for (final DiffLine line in lines) {
@@ -1252,4 +1314,35 @@ bool _hasMeaningfulChanges(List<DiffLine> lines) {
     }
   }
   return false;
+}
+
+String _structureSignature(List<String> lines) {
+  final String joined = lines.join('\n');
+  final List<String> tokens = <String>[];
+  final RegExp tokenRe = RegExp(r'[A-Za-z_][A-Za-z0-9_]*|\\d+|\\S');
+  final Iterable<RegExpMatch> matches = tokenRe.allMatches(joined);
+  for (final RegExpMatch m in matches) {
+    final String t = m.group(0) ?? '';
+    if (t.isEmpty) continue;
+    if (RegExp(r'^[A-Za-z_]').hasMatch(t)) {
+      tokens.add('ID');
+    } else if (RegExp(r'^\\d+$').hasMatch(t)) {
+      tokens.add('NUM');
+    } else {
+      tokens.add(t);
+    }
+  }
+  return tokens.join(' ');
+}
+
+double _structureSimilarity(String a, String b) {
+  if (a.isEmpty || b.isEmpty) return 0.0;
+  final List<String> ta = a.split(' ');
+  final List<String> tb = b.split(' ');
+  final Set<String> sa = ta.toSet();
+  final Set<String> sb = tb.toSet();
+  final int inter = sa.intersection(sb).length;
+  final int union = sa.union(sb).length;
+  if (union == 0) return 0.0;
+  return inter / union;
 }
