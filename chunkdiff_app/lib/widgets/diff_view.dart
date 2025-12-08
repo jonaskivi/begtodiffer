@@ -738,6 +738,35 @@ class _ChunksList extends StatelessWidget {
             (chunk.name.toLowerCase().contains(needle) ||
                 chunk.filePath.toLowerCase().contains(needle) ||
                 chunk.rightFilePath.toLowerCase().contains(needle));
+        final String categoryLabel = switch (chunk.category) {
+          ChunkCategory.moved => 'Moved',
+          ChunkCategory.changed => 'Changed',
+          ChunkCategory.importOnly => 'Import',
+          ChunkCategory.punctuationOnly => 'Punctuation',
+          ChunkCategory.usageOrUnresolved => 'Usage',
+          ChunkCategory.unreadable => 'Unreadable',
+        };
+        final Color categoryColor = switch (chunk.category) {
+          ChunkCategory.moved => Colors.blue.shade800,
+          ChunkCategory.changed => Colors.grey.shade700,
+          ChunkCategory.importOnly => Colors.teal.shade800,
+          ChunkCategory.punctuationOnly => Colors.brown.shade700,
+          ChunkCategory.usageOrUnresolved => Colors.purple.shade700,
+          ChunkCategory.unreadable => Colors.red.shade800,
+        };
+        final List<Widget> chips = <Widget>[
+          Chip(
+            label: Text(categoryLabel),
+            backgroundColor: categoryColor,
+            labelStyle: const TextStyle(color: Colors.white),
+            visualDensity: VisualDensity.compact,
+          ),
+          if (debugHit)
+            const Chip(
+              label: Text('Debug'),
+              visualDensity: VisualDensity.compact,
+            ),
+        ];
         return ListTile(
           dense: true,
           selected: selected,
@@ -745,19 +774,11 @@ class _ChunksList extends StatelessWidget {
           subtitle: Text(
             '${chunk.filePath} | lines ${chunk.oldStart}-${chunk.oldEnd}',
           ),
-          trailing: chunk.ignored
-              ? Chip(
-                  label: const Text('Ignored'),
-                  backgroundColor: Colors.grey.shade800,
-                  labelStyle: const TextStyle(color: Colors.white70),
-                  visualDensity: VisualDensity.compact,
-                )
-              : debugHit
-                  ? Chip(
-                      label: const Text('Debug'),
-                      visualDensity: VisualDensity.compact,
-                    )
-                  : null,
+          trailing: Wrap(
+            spacing: 6,
+            runSpacing: 4,
+            children: chips,
+          ),
           onTap: () => onSelect(index),
         );
       },

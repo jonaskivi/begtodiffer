@@ -21,6 +21,7 @@ class CodeChunk {
   final String name;
   final SymbolKind kind;
   final bool ignored;
+  final ChunkCategory category;
   final List<DiffLine> lines;
 
   const CodeChunk({
@@ -35,8 +36,18 @@ class CodeChunk {
     required this.name,
     required this.kind,
     required this.lines,
+    this.category = ChunkCategory.changed,
     this.ignored = false,
   });
+}
+
+enum ChunkCategory {
+  moved,
+  changed,
+  importOnly,
+  punctuationOnly,
+  usageOrUnresolved,
+  unreadable,
 }
 
 class CodeHunk {
@@ -217,6 +228,7 @@ class Greeter {
       name: 'Greeter.greet',
       kind: SymbolKind.method,
       ignored: false,
+      category: ChunkCategory.changed,
       lines: const <DiffLine>[
         DiffLine(
           leftNumber: 3,
@@ -271,6 +283,7 @@ void main() {
       name: 'main',
       kind: SymbolKind.function,
       ignored: false,
+      category: ChunkCategory.changed,
       lines: const <DiffLine>[
         DiffLine(
           leftNumber: 1,
@@ -616,6 +629,7 @@ Future<List<CodeChunk>> loadChunkDiffs(
         name: 'Ignored',
         kind: SymbolKind.other,
         ignored: true,
+        category: ChunkCategory.unreadable,
         lines: hunk.lines,
       ));
       continue;
@@ -653,7 +667,14 @@ Future<List<CodeChunk>> loadChunkDiffs(
       }
     }
 
+    final bool removalOnly = _isRemovalOnly(hunk.lines);
+    final bool meaningful = _hasMeaningfulChanges(hunk.lines);
+    final bool isImportOnlyHunk = _isImportOnly(hunk.lines);
+
     if (parent == null) {
+      final ChunkCategory cat = isImportOnlyHunk
+          ? ChunkCategory.importOnly
+          : ChunkCategory.usageOrUnresolved;
       chunks.add(CodeChunk(
         filePath: hunk.filePath,
         rightFilePath: hunk.filePath,
@@ -663,9 +684,10 @@ Future<List<CodeChunk>> loadChunkDiffs(
         newEnd: hunk.newEnd,
         leftText: hunk.leftText,
         rightText: hunk.rightText,
-        name: 'Ignored',
+        name: '',
         kind: SymbolKind.other,
         ignored: true,
+        category: cat,
         lines: hunk.lines,
       ));
       continue;
@@ -676,8 +698,6 @@ Future<List<CodeChunk>> loadChunkDiffs(
     final List<String> parentLines =
         fileLines.sublist(startIdx, endIdx + 1).toList();
     final String leftText = parentLines.join('\n');
-    final bool removalOnly = _isRemovalOnly(hunk.lines);
-    final bool meaningful = _hasMeaningfulChanges(hunk.lines);
 
     _ParentMatch? moved;
     if (removalOnly && meaningful) {
@@ -709,7 +729,7 @@ Future<List<CodeChunk>> loadChunkDiffs(
       }
     }
 
-    if (!meaningful && moved == null) {
+    if (isImportOnlyHunk && moved == null) {
       chunks.add(CodeChunk(
         filePath: hunk.filePath,
         rightFilePath: hunk.filePath,
@@ -722,6 +742,28 @@ Future<List<CodeChunk>> loadChunkDiffs(
         name: parent.name,
         kind: parent.kind,
         ignored: true,
+        category: ChunkCategory.importOnly,
+        lines: hunk.lines,
+      ));
+      continue;
+    }
+
+    if (!meaningful && moved == null) {
+      final bool hasImports = _hasImportLikeChange(hunk.lines);
+      chunks.add(CodeChunk(
+        filePath: hunk.filePath,
+        rightFilePath: hunk.filePath,
+        oldStart: parent.startLine,
+        oldEnd: parent.endLine,
+        newStart: hunk.newStart,
+        newEnd: hunk.newEnd,
+        leftText: leftText,
+        rightText: leftText,
+        name: parent.name,
+        kind: parent.kind,
+        ignored: true,
+        category:
+            hasImports ? ChunkCategory.importOnly : ChunkCategory.punctuationOnly,
         lines: hunk.lines,
       ));
       continue;
@@ -749,6 +791,7 @@ Future<List<CodeChunk>> loadChunkDiffs(
       name: parent.name,
       kind: parent.kind,
       ignored: false,
+      category: moved != null ? ChunkCategory.moved : ChunkCategory.changed,
       lines: chunkLines,
     ));
   }
@@ -1314,6 +1357,36 @@ bool _hasMeaningfulChanges(List<DiffLine> lines) {
     }
   }
   return false;
+}
+
+bool _hasImportLikeChange(List<DiffLine> lines) {
+  for (final DiffLine line in lines) {
+    if (line.status == DiffLineStatus.context) continue;
+    final String text =
+        line.leftText.isNotEmpty ? line.leftText : line.rightText;
+    final String lower = text.toLowerCase();
+    if (lower.contains('import') || lower.contains('export') || lower.contains('include')) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool _isImportOnly(List<DiffLine> lines) {
+  bool sawChange = false;
+  for (final DiffLine line in lines) {
+    if (line.status == DiffLineStatus.context) continue;
+    sawChange = true;
+    final String text =
+        line.leftText.isNotEmpty ? line.leftText : line.rightText;
+    final String lower = text.toLowerCase();
+    if (!(lower.contains('import') ||
+        lower.contains('export') ||
+        lower.contains('include'))) {
+      return false;
+    }
+  }
+  return sawChange;
 }
 
 String _structureSignature(List<String> lines) {
