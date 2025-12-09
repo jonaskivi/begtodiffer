@@ -4,12 +4,15 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'log.dart';
 
+bool _parserChecksRun = false;
+
 enum SymbolKind { function, method, classType, enumType, other }
 
 /// Special ref string to indicate the working tree instead of a named ref.
 const String kWorktreeRef = 'WORKTREE';
 
 class CodeChunk {
+  final int id;
   final String filePath;
   final String rightFilePath;
   final int oldStart;
@@ -25,6 +28,7 @@ class CodeChunk {
   final List<DiffLine> lines;
 
   const CodeChunk({
+    required this.id,
     required this.filePath,
     required this.rightFilePath,
     required this.oldStart,
@@ -212,6 +216,7 @@ void main() {
 List<CodeChunk> dummyCodeChunks() {
   return <CodeChunk>[
     CodeChunk(
+      id: 0,
       filePath: 'lib/src/example.dart',
       rightFilePath: 'lib/src/example.dart',
       oldStart: 3,
@@ -268,6 +273,7 @@ class Greeter {
       ],
     ),
     CodeChunk(
+      id: 1,
       filePath: 'lib/main.dart',
       rightFilePath: 'lib/main.dart',
       oldStart: 1,
@@ -462,6 +468,7 @@ Future<List<SymbolDiff>> loadSymbolDiffs(
   String leftRef,
   String rightRef,
 ) async {
+  _runParserSelfChecksOnce();
   final Map<String, SymbolChange> changes = <String, SymbolChange>{};
 
   final List<String> statusArgs = <String>['diff', '--name-status', '--no-color'];
@@ -602,6 +609,7 @@ Future<List<CodeChunk>> loadChunkDiffs(
   }
 
   final List<CodeChunk> chunks = <CodeChunk>[];
+  int chunkId = 0;
   for (final CodeHunk hunk in hunks) {
     int lookupLine = hunk.oldStart > 0 ? hunk.oldStart : hunk.newStart;
     for (final DiffLine line in hunk.lines) {
@@ -618,6 +626,7 @@ Future<List<CodeChunk>> loadChunkDiffs(
     }
     if (fileText == null || fileText.isEmpty) {
       chunks.add(CodeChunk(
+        id: chunkId++,
         filePath: hunk.filePath,
         rightFilePath: hunk.filePath,
         oldStart: hunk.oldStart,
@@ -676,6 +685,7 @@ Future<List<CodeChunk>> loadChunkDiffs(
           ? ChunkCategory.importOnly
           : ChunkCategory.usageOrUnresolved;
       chunks.add(CodeChunk(
+        id: chunkId++,
         filePath: hunk.filePath,
         rightFilePath: hunk.filePath,
         oldStart: hunk.oldStart,
@@ -729,8 +739,9 @@ Future<List<CodeChunk>> loadChunkDiffs(
       }
     }
 
-    if (isImportOnlyHunk && moved == null) {
+    if (isImportOnlyHunk && !meaningful && moved == null) {
       chunks.add(CodeChunk(
+        id: chunkId++,
         filePath: hunk.filePath,
         rightFilePath: hunk.filePath,
         oldStart: parent.startLine,
@@ -749,8 +760,8 @@ Future<List<CodeChunk>> loadChunkDiffs(
     }
 
     if (!meaningful && moved == null) {
-      final bool hasImports = _hasImportLikeChange(hunk.lines);
       chunks.add(CodeChunk(
+        id: chunkId++,
         filePath: hunk.filePath,
         rightFilePath: hunk.filePath,
         oldStart: parent.startLine,
@@ -762,8 +773,9 @@ Future<List<CodeChunk>> loadChunkDiffs(
         name: parent.name,
         kind: parent.kind,
         ignored: true,
-        category:
-            hasImports ? ChunkCategory.importOnly : ChunkCategory.punctuationOnly,
+        category: isImportOnlyHunk
+            ? ChunkCategory.importOnly
+            : ChunkCategory.punctuationOnly,
         lines: hunk.lines,
       ));
       continue;
@@ -779,6 +791,7 @@ Future<List<CodeChunk>> loadChunkDiffs(
           );
 
     chunks.add(CodeChunk(
+      id: chunkId++,
       filePath: hunk.filePath,
       rightFilePath: moved?.filePath ?? hunk.filePath,
       oldStart: parent.startLine,
@@ -1342,51 +1355,97 @@ bool _isAddedOnly(List<DiffLine> lines) {
 
 bool _hasMeaningfulChanges(List<DiffLine> lines) {
   final RegExp alnum = RegExp(r'[A-Za-z0-9]');
+  bool foundImport = false;
   for (final DiffLine line in lines) {
     if (line.status == DiffLineStatus.context) {
       continue;
     }
-    final String text =
-        line.leftText.isNotEmpty ? line.leftText : line.rightText;
-    final String lower = text.toLowerCase();
-    if (lower.contains('import') || lower.contains('export') || lower.contains('include')) {
+    final String text = line.leftText.isNotEmpty ? line.leftText : line.rightText;
+    if (_isImportLine(text)) {
+      foundImport = true;
       continue;
     }
     if (alnum.hasMatch(text)) {
       return true;
     }
   }
+  // If we only saw imports (and no other alnum text), treat as non-meaningful.
   return false;
 }
 
 bool _hasImportLikeChange(List<DiffLine> lines) {
+  bool sawImport = false;
   for (final DiffLine line in lines) {
     if (line.status == DiffLineStatus.context) continue;
-    final String text =
-        line.leftText.isNotEmpty ? line.leftText : line.rightText;
-    final String lower = text.toLowerCase();
-    if (lower.contains('import') || lower.contains('export') || lower.contains('include')) {
-      return true;
+    final String text = line.leftText.isNotEmpty ? line.leftText : line.rightText;
+    if (_isImportLine(text)) {
+      sawImport = true;
     }
   }
-  return false;
+  return sawImport;
 }
 
 bool _isImportOnly(List<DiffLine> lines) {
   bool sawChange = false;
+  bool sawImport = false;
   for (final DiffLine line in lines) {
     if (line.status == DiffLineStatus.context) continue;
     sawChange = true;
-    final String text =
-        line.leftText.isNotEmpty ? line.leftText : line.rightText;
-    final String lower = text.toLowerCase();
-    if (!(lower.contains('import') ||
-        lower.contains('export') ||
-        lower.contains('include'))) {
+    final String text = line.leftText.isNotEmpty ? line.leftText : line.rightText;
+    if (_isImportLine(text)) {
+      sawImport = true;
+    } else {
       return false;
     }
   }
-  return sawChange;
+  return sawChange && sawImport;
+}
+
+bool _isImportLine(String text) {
+  final String t = text.trimLeft().toLowerCase();
+  return t.startsWith('import ') ||
+      t.startsWith('export ') ||
+      t.startsWith('include ');
+}
+
+void _runParserSelfChecksOnce() {
+  if (_parserChecksRun || !isDebugBuild()) {
+    return;
+  }
+  _parserChecksRun = true;
+
+  logVerbose('[selfcheck] Running parser helpers self-checks');
+
+  DiffLine _changed(String text) => DiffLine(
+        leftNumber: null,
+        rightNumber: 1,
+        leftText: '',
+        rightText: text,
+        status: DiffLineStatus.added,
+      );
+
+  const String codeLine = 'RaidingService.instance.setHostEndLiveFlowInProgress(true);';
+  final List<DiffLine> codeLines = <DiffLine>[_changed(codeLine)];
+  final bool codeIsImport = _isImportLine(codeLine);
+  final bool codeIsImportOnly = _isImportOnly(codeLines);
+  logVerbose('[selfcheck][${(!codeIsImport && !codeIsImportOnly) ? 'PASS' : 'FAIL'}] '
+      'codeLine isImportLine=$codeIsImport, isImportOnly=$codeIsImportOnly');
+
+  const String importLineText = 'import \"foo.dart\";';
+  final List<DiffLine> importLines = <DiffLine>[_changed(importLineText)];
+  final bool importIsImport = _isImportLine(importLineText);
+  final bool importIsImportOnly = _isImportOnly(importLines);
+  logVerbose('[selfcheck][${(importIsImport && importIsImportOnly) ? 'PASS' : 'FAIL'}] '
+      'importLine isImportLine=$importIsImport, isImportOnly=$importIsImportOnly');
+
+  final List<DiffLine> mixed = <DiffLine>[
+    _changed(importLineText),
+    _changed(codeLine),
+  ];
+  final bool mixedImportOnly = _isImportOnly(mixed);
+  final bool mixedMeaningful = _hasMeaningfulChanges(mixed);
+  logVerbose('[selfcheck][${(!mixedImportOnly && mixedMeaningful) ? 'PASS' : 'FAIL'}] '
+      'mixed isImportOnly=$mixedImportOnly, hasMeaningful=$mixedMeaningful');
 }
 
 String _structureSignature(List<String> lines) {

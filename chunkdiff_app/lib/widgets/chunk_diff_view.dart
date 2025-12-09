@@ -35,8 +35,8 @@ class ChunkDiffView extends StatelessWidget {
     final String shortRight = p.basename(chunk.rightFilePath);
     final bool moved = chunk.filePath != chunk.rightFilePath;
     final String header = moved
-        ? '${chunk.name} • ${chunk.filePath} → ${chunk.rightFilePath}'
-        : '${chunk.name} • ${chunk.filePath} (lines ${chunk.oldStart}-${chunk.oldEnd})';
+        ? '#${chunk.id} • ${chunk.name} • ${chunk.filePath} → ${chunk.rightFilePath}'
+        : '#${chunk.id} • ${chunk.name} • ${chunk.filePath} (lines ${chunk.oldStart}-${chunk.oldEnd})';
     return DiffLinesView(
       lines: chunk.lines,
       header: header,
@@ -45,8 +45,8 @@ class ChunkDiffView extends StatelessWidget {
           : moved
               ? 'Moved'
               : null,
-      leftLabel: shortLeft,
-      rightLabel: shortRight,
+      leftLabel: '#${chunk.id} • $shortLeft',
+      rightLabel: '#${chunk.id} • $shortRight',
       scrollable: true,
     );
   }

@@ -10,6 +10,8 @@ const bool _isDebug = !bool.fromEnvironment('dart.vm.product');
 final List<String> _debugLog = <String>[];
 bool _verboseEnabled = _isDebug;
 
+bool isDebugBuild() => _isDebug;
+
 void logDebug(String message) {
   // Always print for visibility in console.
   // ignore: avoid_print

@@ -811,7 +811,7 @@ class _ChunksList extends StatelessWidget {
         return ListTile(
           dense: true,
           selected: selected,
-          title: Text(chunk.name),
+          title: Text('${chunk.id}: ${chunk.name}'),
           subtitle: Text(
             '${chunk.filePath} | lines ${chunk.oldStart}-${chunk.oldEnd}',
           ),
