@@ -42,6 +42,34 @@ class _DiffViewState extends ConsumerState<DiffView>
     super.dispose();
   }
 
+  List<CodeChunk> _sortChunks(List<CodeChunk> raw) {
+    int rank(ChunkCategory cat) {
+      switch (cat) {
+        case ChunkCategory.moved:
+          return 0;
+        case ChunkCategory.changed:
+          return 1;
+        case ChunkCategory.usageOrUnresolved:
+          return 2;
+        case ChunkCategory.punctuationOnly:
+          return 3;
+        case ChunkCategory.unreadable:
+          return 4;
+        case ChunkCategory.importOnly:
+          return 5;
+      }
+    }
+
+    final List<CodeChunk> copy = List<CodeChunk>.from(raw);
+    copy.sort((CodeChunk a, CodeChunk b) {
+      final int ra = rank(a.category);
+      final int rb = rank(b.category);
+      if (ra != rb) return ra.compareTo(rb);
+      return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+    });
+    return copy;
+  }
+
   @override
   Widget build(BuildContext context) {
     final AsyncValue<List<SymbolDiff>> asyncDiffs =
@@ -73,6 +101,13 @@ class _DiffViewState extends ConsumerState<DiffView>
     final int selectedFileIndex = ref.watch(selectedChangeIndexProvider);
     final int selectedHunkIndex = ref.watch(selectedHunkIndexProvider);
     final int selectedChunkIndex = ref.watch(selectedChunkIndexProvider);
+    final List<CodeChunk> sortedChunks =
+        _sortChunks(asyncChunks.value ?? const <CodeChunk>[]);
+    final int clampedChunkIndex = sortedChunks.isEmpty
+        ? 0
+        : selectedChunkIndex.clamp(0, sortedChunks.length - 1);
+    final int? selectedChunkId =
+        sortedChunks.isEmpty ? null : sortedChunks[clampedChunkIndex].id;
     final AppSettings? settings =
         ref.watch(settingsControllerProvider).maybeWhen(
               data: (AppSettings s) => s,
@@ -238,8 +273,8 @@ class _DiffViewState extends ConsumerState<DiffView>
                       );
                     }
                     return _ChunksList(
-                      asyncChunks: asyncChunks,
-                      selectedIndex: selectedChunkIndex,
+                      asyncChunks: AsyncValue.data(sortedChunks),
+                      selectedIndex: clampedChunkIndex,
                       onSelect: (int idx) {
                         ref.read(selectedChunkIndexProvider.notifier).state =
                             idx;
@@ -259,6 +294,17 @@ class _DiffViewState extends ConsumerState<DiffView>
         Expanded(
           child: Column(
             children: [
+              if (activeTab == ChangesTab.moved && selectedChunkId != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Text(
+                    'Chunk #$selectedChunkId',
+                    style: Theme.of(context)
+                        .textTheme
+                        .titleMedium
+                        ?.copyWith(fontWeight: FontWeight.w700),
+                  ),
+                ),
               _DiffMetaBar(
                 change: selectedChange,
                 leftRef: leftRef,
@@ -359,8 +405,8 @@ class _DiffViewState extends ConsumerState<DiffView>
                       )
                     : activeTab == ChangesTab.moved
                         ? ChunkDiffView(
-                            asyncChunks: asyncChunks,
-                            selectedIndex: selectedChunkIndex,
+                            asyncChunks: AsyncValue.data(sortedChunks),
+                            selectedIndex: clampedChunkIndex,
                           )
                         : _HunkDiffView(
                             asyncHunks: asyncHunks,
@@ -713,9 +759,8 @@ class _ChunksList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final List<CodeChunk> rawChunks = asyncChunks.value ?? const <CodeChunk>[];
-    final List<CodeChunk> chunks = List<CodeChunk>.from(rawChunks);
-    int _categoryRank(ChunkCategory cat) {
+    final List<CodeChunk> chunks = asyncChunks.value ?? const <CodeChunk>[];
+    int categoryRank(ChunkCategory cat) {
       switch (cat) {
         case ChunkCategory.moved:
           return 0;
@@ -728,16 +773,9 @@ class _ChunksList extends StatelessWidget {
         case ChunkCategory.unreadable:
           return 4;
         case ChunkCategory.importOnly:
-          return 5; // always last
+          return 5;
       }
     }
-
-    chunks.sort((CodeChunk a, CodeChunk b) {
-      final int ra = _categoryRank(a.category);
-      final int rb = _categoryRank(b.category);
-      if (ra != rb) return ra.compareTo(rb);
-      return a.name.toLowerCase().compareTo(b.name.toLowerCase());
-    });
 
     if (chunks.isEmpty) {
       return Center(
@@ -758,8 +796,8 @@ class _ChunksList extends StatelessWidget {
         if (index >= chunks.length - 1) {
           return const SizedBox(height: 12);
         }
-        final int currentRank = _categoryRank(chunks[index].category);
-        final int nextRank = _categoryRank(chunks[index + 1].category);
+        final int currentRank = categoryRank(chunks[index].category);
+        final int nextRank = categoryRank(chunks[index + 1].category);
         if (currentRank != nextRank) {
           return Column(
             children: <Widget>[
