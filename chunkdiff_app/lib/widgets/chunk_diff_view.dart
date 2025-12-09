@@ -10,10 +10,12 @@ class ChunkDiffView extends StatelessWidget {
     super.key,
     required this.asyncChunks,
     required this.selectedIndex,
+    this.controller,
   });
 
   final AsyncValue<List<CodeChunk>> asyncChunks;
   final int selectedIndex;
+  final ScrollController? controller;
 
   @override
   Widget build(BuildContext context) {
@@ -48,6 +50,7 @@ class ChunkDiffView extends StatelessWidget {
       leftLabel: '#${chunk.id} • $shortLeft',
       rightLabel: '#${chunk.id} • $shortRight',
       scrollable: true,
+      controller: controller,
     );
   }
 }

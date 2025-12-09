@@ -12,6 +12,7 @@ class DiffLinesView extends StatelessWidget {
     this.scrollable = true,
     this.leftLabel,
     this.rightLabel,
+    this.controller,
   });
 
   final List<DiffLine> lines;
@@ -20,6 +21,7 @@ class DiffLinesView extends StatelessWidget {
   final bool scrollable;
   final String? leftLabel;
   final String? rightLabel;
+  final ScrollController? controller;
 
   @override
   Widget build(BuildContext context) {
@@ -75,6 +77,7 @@ class DiffLinesView extends StatelessWidget {
     if (scrollable) {
       return ListView.builder(
         padding: EdgeInsets.zero,
+        controller: controller,
         itemCount: lines.length +
             (headerWidget == null ? 0 : 1) +
             (labelsRow == null ? 0 : 1),

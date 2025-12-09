@@ -31,7 +31,9 @@ class _DiffViewState extends ConsumerState<DiffView>
   final ScrollController _conflictScroll = ScrollController();
   final Map<String, List<GlobalKey>> _hunkKeysByFile = <String, List<GlobalKey>>{};
   final Map<String, int> _conflictPointerByFile = <String, int>{};
+  final Map<String, int> _hunkPointerByFile = <String, int>{};
   List<CodeHunk> _latestHunks = const <CodeHunk>[];
+  late ScrollController _contentScroll;
 
   @override
   void initState() {
@@ -41,6 +43,7 @@ class _DiffViewState extends ConsumerState<DiffView>
       vsync: this,
       duration: const Duration(milliseconds: 1400),
     )..repeat();
+    _contentScroll = ScrollController();
     _filesFocus = FocusNode(debugLabel: 'filesFocus');
     _hunksFocus = FocusNode(debugLabel: 'hunksFocus');
     _rootFocus = FocusNode(debugLabel: 'rootFocus');
@@ -57,6 +60,7 @@ class _DiffViewState extends ConsumerState<DiffView>
     _debounce?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     _shimmerController.dispose();
+    _contentScroll.dispose();
     _filesFocus.dispose();
     _hunksFocus.dispose();
     _rootFocus.dispose();
@@ -84,6 +88,11 @@ class _DiffViewState extends ConsumerState<DiffView>
     _fsSub?.cancel();
     _fsSub = null;
     _watchedPath = null;
+  }
+
+  void _resetHunkPointer(String? filePath) {
+    if (filePath == null) return;
+    _hunkPointerByFile.remove(filePath);
   }
 
   void _restartWatcher() {
@@ -140,7 +149,14 @@ class _DiffViewState extends ConsumerState<DiffView>
     return list[index];
   }
 
-  void _jumpToConflict(Set<String> conflictFiles, {required bool up}) {
+  void _showSnack(BuildContext context, String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), duration: const Duration(milliseconds: 900)),
+    );
+  }
+
+  void _jumpToConflict(BuildContext context, Set<String> conflictFiles,
+      {required bool up}) {
     final String? filePath = _currentFilePath();
     if (filePath == null || !conflictFiles.contains(filePath)) {
       return;
@@ -155,10 +171,23 @@ class _DiffViewState extends ConsumerState<DiffView>
     if (conflictIndices.isEmpty) {
       return;
     }
-    final int current = _conflictPointerByFile[filePath] ?? 0;
+    final int last = conflictIndices.length - 1;
+    final double frac = (_conflictScroll.hasClients && _conflictScroll.position.maxScrollExtent > 0)
+        ? (_conflictScroll.offset / _conflictScroll.position.maxScrollExtent)
+        : 0.0;
+    final int scrollBased = (frac * last).round().clamp(0, last);
+    final int current = _conflictPointerByFile.containsKey(filePath)
+        ? (_conflictPointerByFile[filePath] ?? scrollBased).clamp(0, last)
+        : scrollBased;
     int next = up ? current - 1 : current + 1;
-    if (next < 0) next = conflictIndices.length - 1;
-    if (next >= conflictIndices.length) next = 0;
+    if (next < 0) {
+      next = 0;
+      _showSnack(context, 'Reached the top conflict');
+    }
+    if (next > last) {
+      next = last;
+      _showSnack(context, 'Reached the bottom conflict');
+    }
     _conflictPointerByFile[filePath] = next;
     final int targetIndex = conflictIndices[next];
     final List<GlobalKey>? keys = _hunkKeysByFile[filePath];
@@ -185,6 +214,83 @@ class _DiffViewState extends ConsumerState<DiffView>
         curve: Curves.easeInOut,
       );
     }
+  }
+
+  void _jumpHunk(BuildContext context, bool up) {
+    final String? filePath = _currentFilePath();
+    if (filePath == null) return;
+    final List<GlobalKey>? keys = _hunkKeysByFile[filePath];
+    if (keys == null || keys.isEmpty) return;
+    final double frac = (_conflictScroll.hasClients &&
+            _conflictScroll.position.maxScrollExtent > 0)
+        ? (_conflictScroll.offset /
+            _conflictScroll.position.maxScrollExtent)
+        : 0.0;
+    final int scrollBased =
+        (frac * (keys.length - 1)).round().clamp(0, keys.length - 1);
+    final int current = _hunkPointerByFile.containsKey(filePath)
+        ? (_hunkPointerByFile[filePath] ?? scrollBased)
+            .clamp(0, keys.length - 1)
+        : scrollBased;
+    final int last = keys.length - 1;
+    int next = up ? current - 1 : current + 1;
+    if (next < 0) {
+      next = 0;
+      _showSnack(context, 'Reached the top');
+    }
+    if (next > last) {
+      next = last;
+      _showSnack(context, 'Reached the bottom');
+    }
+    _hunkPointerByFile[filePath] = next;
+    final BuildContext? ctx = keys[next].currentContext;
+    if (ctx != null) {
+      Scrollable.ensureVisible(
+        ctx,
+        alignment: 0.2,
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeInOut,
+      );
+      return;
+    }
+    if (_conflictScroll.hasClients) {
+      final double fraction = next / keys.length.clamp(1, keys.length);
+      final double targetOffset =
+          _conflictScroll.position.maxScrollExtent * fraction;
+      _conflictScroll.animateTo(
+        targetOffset,
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeInOut,
+      );
+    }
+  }
+
+  void _pageScroll(
+    BuildContext context,
+    ScrollController controller, {
+    required bool up,
+  }) {
+    if (!controller.hasClients) return;
+    final double delta = controller.position.viewportDimension * 0.75;
+    final double target = up
+        ? (controller.offset - delta).clamp(
+            controller.position.minScrollExtent,
+            controller.position.maxScrollExtent,
+          )
+        : (controller.offset + delta).clamp(
+            controller.position.minScrollExtent,
+            controller.position.maxScrollExtent,
+          );
+    if ((up && target == controller.offset) ||
+        (!up && target == controller.offset)) {
+      _showSnack(context, up ? 'Reached the top' : 'Reached the bottom');
+      return;
+    }
+    controller.animateTo(
+      target,
+      duration: const Duration(milliseconds: 200),
+      curve: Curves.easeOut,
+    );
   }
 
   String? _currentFilePath() {
@@ -398,7 +504,9 @@ class _DiffViewState extends ConsumerState<DiffView>
             final int next =
                 (selectedFileIndex + delta).clamp(0, len - 1);
             if (next != selectedFileIndex) {
-              _resetConflictPointer(_filePathForChange(changes[next]));
+              final String? nextPath = _filePathForChange(changes[next]);
+              _resetConflictPointer(nextPath);
+              _resetHunkPointer(nextPath);
               ref.read(selectedChangeIndexProvider.notifier).state = next;
               ref.read(settingsControllerProvider.notifier).setSelectedFileIndex(next);
               return KeyEventResult.handled;
@@ -444,6 +552,94 @@ class _DiffViewState extends ConsumerState<DiffView>
                 },
               ),
               const SizedBox(height: 8),
+              _SelectionToolbar(
+                tab: activeTab,
+                onUp: () {
+                  switch (activeTab) {
+                    case ChangesTab.files:
+                      if (changes.isEmpty) return;
+                      if (selectedFileIndex > 0) {
+                        _resetConflictPointer(
+                            _filePathForChange(changes[selectedFileIndex - 1]));
+                        _resetHunkPointer(
+                            _filePathForChange(changes[selectedFileIndex - 1]));
+                        ref.read(selectedChangeIndexProvider.notifier).state =
+                            selectedFileIndex - 1;
+                        ref
+                            .read(settingsControllerProvider.notifier)
+                            .setSelectedFileIndex(selectedFileIndex - 1);
+                      }
+                      break;
+                    case ChangesTab.hunks:
+                      final int len = asyncHunks.value?.length ?? 0;
+                      if (len == 0) return;
+                      if (selectedHunkIndex > 0) {
+                        ref.read(selectedHunkIndexProvider.notifier).state =
+                            selectedHunkIndex - 1;
+                        ref
+                            .read(settingsControllerProvider.notifier)
+                            .setSelectedHunkIndex(selectedHunkIndex - 1);
+                      }
+                      break;
+                    case ChangesTab.moved:
+                      final int len = sortedChunks.length;
+                      if (len == 0) return;
+                      final int clamped =
+                          selectedChunkIndex.clamp(0, len - 1);
+                      if (clamped > 0) {
+                        ref.read(selectedChunkIndexProvider.notifier).state =
+                            clamped - 1;
+                        ref
+                            .read(settingsControllerProvider.notifier)
+                            .setSelectedChunkIndex(clamped - 1);
+                      }
+                      break;
+                  }
+                },
+                onDown: () {
+                  switch (activeTab) {
+                    case ChangesTab.files:
+                      if (selectedFileIndex < changes.length - 1) {
+                        _resetConflictPointer(
+                            _filePathForChange(changes[selectedFileIndex + 1]));
+                        _resetHunkPointer(
+                            _filePathForChange(changes[selectedFileIndex + 1]));
+                        ref.read(selectedChangeIndexProvider.notifier).state =
+                            selectedFileIndex + 1;
+                        ref
+                            .read(settingsControllerProvider.notifier)
+                            .setSelectedFileIndex(selectedFileIndex + 1);
+                      }
+                      break;
+                    case ChangesTab.hunks:
+                      final int len = asyncHunks.value?.length ?? 0;
+                      if (len == 0) return;
+                      final int maxIndex = len - 1;
+                      if (selectedHunkIndex < maxIndex) {
+                        ref.read(selectedHunkIndexProvider.notifier).state =
+                            selectedHunkIndex + 1;
+                        ref
+                            .read(settingsControllerProvider.notifier)
+                            .setSelectedHunkIndex(selectedHunkIndex + 1);
+                      }
+                      break;
+                    case ChangesTab.moved:
+                      final int len = sortedChunks.length;
+                      if (len == 0) return;
+                      final int clamped =
+                          selectedChunkIndex.clamp(0, len - 1);
+                      if (clamped < len - 1) {
+                        ref.read(selectedChunkIndexProvider.notifier).state =
+                            clamped + 1;
+                        ref
+                            .read(settingsControllerProvider.notifier)
+                            .setSelectedChunkIndex(clamped + 1);
+                      }
+                      break;
+                  }
+                },
+              ),
+              const SizedBox(height: 8),
               Expanded(
                 child: Builder(
                   builder: (BuildContext context) {
@@ -477,6 +673,7 @@ class _DiffViewState extends ConsumerState<DiffView>
                         selectedIndex: selectedFileIndex,
                         onSelect: (int idx) {
                           _resetConflictPointer(_filePathForChange(changes[idx]));
+                          _resetHunkPointer(_filePathForChange(changes[idx]));
                           ref
                               .read(selectedChangeIndexProvider.notifier)
                               .state = idx;
@@ -487,6 +684,8 @@ class _DiffViewState extends ConsumerState<DiffView>
                         onArrowUp: () {
                           if (selectedFileIndex > 0) {
                             _resetConflictPointer(
+                                _filePathForChange(changes[selectedFileIndex - 1]));
+                            _resetHunkPointer(
                                 _filePathForChange(changes[selectedFileIndex - 1]));
                             ref
                                 .read(selectedChangeIndexProvider.notifier)
@@ -499,6 +698,8 @@ class _DiffViewState extends ConsumerState<DiffView>
                         onArrowDown: () {
                           if (selectedFileIndex < changes.length - 1) {
                             _resetConflictPointer(
+                                _filePathForChange(changes[selectedFileIndex + 1]));
+                            _resetHunkPointer(
                                 _filePathForChange(changes[selectedFileIndex + 1]));
                             ref
                                 .read(selectedChangeIndexProvider.notifier)
@@ -669,54 +870,24 @@ class _DiffViewState extends ConsumerState<DiffView>
                     selectedFileHasConflict && activeTab == ChangesTab.files,
                 onPrevConflict: () {
                   if (activeTab != ChangesTab.files) return;
-                  _jumpToConflict(conflictFiles, up: true);
+                  _jumpToConflict(context, conflictFiles, up: true);
                 },
                 onNextConflict: () {
                   if (activeTab != ChangesTab.files) return;
-                  _jumpToConflict(conflictFiles, up: false);
+                  _jumpToConflict(context, conflictFiles, up: false);
                 },
                 onPrev: () {
                   if (activeTab == ChangesTab.files) {
-                    if (selectedFileIndex > 0) {
-                      ref
-                          .read(selectedChangeIndexProvider.notifier)
-                          .state = selectedFileIndex - 1;
-                      ref
-                          .read(settingsControllerProvider.notifier)
-                          .setSelectedFileIndex(selectedFileIndex - 1);
-                    }
-                  } else if (activeTab == ChangesTab.hunks) {
-                    if (selectedHunkIndex > 0) {
-                      ref
-                          .read(selectedHunkIndexProvider.notifier)
-                          .state = selectedHunkIndex - 1;
-                      ref
-                          .read(settingsControllerProvider.notifier)
-                          .setSelectedHunkIndex(selectedHunkIndex - 1);
-                    }
+                    _pageScroll(context, _conflictScroll, up: true);
+                  } else {
+                    _pageScroll(context, _contentScroll, up: true);
                   }
                 },
                 onNext: () {
                   if (activeTab == ChangesTab.files) {
-                    if (selectedFileIndex < changes.length - 1) {
-                      ref
-                          .read(selectedChangeIndexProvider.notifier)
-                          .state = selectedFileIndex + 1;
-                      ref
-                          .read(settingsControllerProvider.notifier)
-                          .setSelectedFileIndex(selectedFileIndex + 1);
-                    }
-                  } else if (activeTab == ChangesTab.hunks) {
-                    final int maxIndex =
-                        (asyncHunks.value?.length ?? 0) - 1;
-                    if (selectedHunkIndex < maxIndex) {
-                      ref
-                          .read(selectedHunkIndexProvider.notifier)
-                          .state = selectedHunkIndex + 1;
-                      ref
-                          .read(settingsControllerProvider.notifier)
-                          .setSelectedHunkIndex(selectedHunkIndex + 1);
-                    }
+                    _pageScroll(context, _conflictScroll, up: false);
+                  } else {
+                    _pageScroll(context, _contentScroll, up: false);
                   }
                 },
               ),
@@ -741,6 +912,7 @@ class _DiffViewState extends ConsumerState<DiffView>
                         ? ChunkDiffView(
                             asyncChunks: AsyncValue.data(sortedChunks),
                             selectedIndex: clampedChunkIndex,
+                            controller: _contentScroll,
                           )
                     : _HunkDiffView(
                         asyncHunks: asyncHunks,
@@ -748,7 +920,7 @@ class _DiffViewState extends ConsumerState<DiffView>
                         selectedFileChange: selectedChange,
                         activeTab: activeTab,
                         scrollController:
-                            activeTab == ChangesTab.files ? _conflictScroll : null,
+                            activeTab == ChangesTab.files ? _conflictScroll : _contentScroll,
                         hunkKeyBuilder: activeTab == ChangesTab.files
                             ? _hunkKeyFor
                             : null,
@@ -803,12 +975,12 @@ class _DiffMetaBar extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             IconButton(
-              tooltip: 'Previous',
+              tooltip: 'Jump up',
               icon: const Icon(Icons.arrow_upward),
               onPressed: onPrev,
             ),
             IconButton(
-              tooltip: 'Next',
+              tooltip: 'Jump down',
               icon: const Icon(Icons.arrow_downward),
               onPressed: onNext,
             ),
@@ -892,6 +1064,43 @@ class _TabSwitcher extends StatelessWidget {
           label: 'Moved',
           selected: activeTab == ChangesTab.moved,
           onTap: () => onChanged(ChangesTab.moved),
+        ),
+      ],
+    );
+  }
+}
+
+class _SelectionToolbar extends StatelessWidget {
+  const _SelectionToolbar({
+    required this.tab,
+    required this.onUp,
+    required this.onDown,
+  });
+
+  final ChangesTab tab;
+  final VoidCallback onUp;
+  final VoidCallback onDown;
+
+  @override
+  Widget build(BuildContext context) {
+    final String label = switch (tab) {
+      ChangesTab.files => 'Files',
+      ChangesTab.hunks => 'Hunks',
+      ChangesTab.moved => 'Moved',
+    };
+    return Row(
+      children: [
+        Text(label, style: Theme.of(context).textTheme.labelLarge),
+        const Spacer(),
+        IconButton(
+          tooltip: 'Select previous $label item',
+          icon: const Icon(Icons.keyboard_arrow_up),
+          onPressed: onUp,
+        ),
+        IconButton(
+          tooltip: 'Select next $label item',
+          icon: const Icon(Icons.keyboard_arrow_down),
+          onPressed: onDown,
         ),
       ],
     );
@@ -1097,6 +1306,7 @@ class _HunkDiffView extends StatelessWidget {
             '${hunk.filePath}  (Old ${hunk.oldStart}-${hunk.oldStart + hunk.oldCount - 1} → '
             'New ${hunk.newStart}-${hunk.newStart + hunk.newCount - 1})',
         scrollable: true,
+        controller: scrollController,
       );
     }
 
