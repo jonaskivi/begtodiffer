@@ -182,7 +182,8 @@ class _DiffLineRowState extends State<_DiffLineRow> {
       case DiffLineStatus.removed:
         return const Color(0xFF3b1f1f);
       case DiffLineStatus.changed:
-        return const Color(0xFF2f2424);
+        // Changed: cool tone on left
+        return const Color(0xFF243248); // deep blue-gray
       default:
         return Colors.transparent;
     }
@@ -193,7 +194,8 @@ class _DiffLineRowState extends State<_DiffLineRow> {
       case DiffLineStatus.added:
         return const Color(0xFF1f3b1f);
       case DiffLineStatus.changed:
-        return const Color(0xFF243b24);
+        // Changed: warm tone on right
+        return const Color(0xFF8a5c00); // vivid amber/orange, still dark enough for white text
       default:
         return Colors.transparent;
     }
