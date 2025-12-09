@@ -28,6 +28,10 @@ class _DiffViewState extends ConsumerState<DiffView>
   StreamSubscription<FileSystemEvent>? _fsSub;
   Timer? _debounce;
   String? _watchedPath;
+  final ScrollController _conflictScroll = ScrollController();
+  final Map<String, List<GlobalKey>> _hunkKeysByFile = <String, List<GlobalKey>>{};
+  final Map<String, int> _conflictPointerByFile = <String, int>{};
+  List<CodeHunk> _latestHunks = const <CodeHunk>[];
 
   @override
   void initState() {
@@ -56,6 +60,7 @@ class _DiffViewState extends ConsumerState<DiffView>
     _filesFocus.dispose();
     _hunksFocus.dispose();
     _rootFocus.dispose();
+    _conflictScroll.dispose();
     super.dispose();
   }
 
@@ -116,6 +121,75 @@ class _DiffViewState extends ConsumerState<DiffView>
       // ignore: avoid_print
       print('Unable to start watcher: $e\n$st');
     }
+  }
+
+  String? _filePathForChange(SymbolChange change) =>
+      change.beforePath ?? change.afterPath;
+
+  void _resetConflictPointer(String? filePath) {
+    if (filePath == null) return;
+    _conflictPointerByFile.remove(filePath);
+  }
+
+  GlobalKey _hunkKeyFor(String filePath, int index, CodeHunk hunk) {
+    final List<GlobalKey> list =
+        _hunkKeysByFile.putIfAbsent(filePath, () => <GlobalKey>[]);
+    while (list.length <= index) {
+      list.add(GlobalKey());
+    }
+    return list[index];
+  }
+
+  void _jumpToConflict(Set<String> conflictFiles, {required bool up}) {
+    final String? filePath = _currentFilePath();
+    if (filePath == null || !conflictFiles.contains(filePath)) {
+      return;
+    }
+    final List<CodeHunk> filtered = _latestHunks
+        .where((CodeHunk h) => h.filePath == filePath)
+        .toList();
+    final List<int> conflictIndices = <int>[];
+    for (int i = 0; i < filtered.length; i++) {
+      if (filtered[i].hasConflict) conflictIndices.add(i);
+    }
+    if (conflictIndices.isEmpty) {
+      return;
+    }
+    final int current = _conflictPointerByFile[filePath] ?? 0;
+    int next = up ? current - 1 : current + 1;
+    if (next < 0) next = conflictIndices.length - 1;
+    if (next >= conflictIndices.length) next = 0;
+    _conflictPointerByFile[filePath] = next;
+    final int targetIndex = conflictIndices[next];
+    final List<GlobalKey>? keys = _hunkKeysByFile[filePath];
+    if (keys != null && targetIndex < keys.length) {
+      final BuildContext? ctx = keys[targetIndex].currentContext;
+      if (ctx != null) {
+        Scrollable.ensureVisible(
+          ctx,
+          alignment: 0.3,
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeInOut,
+        );
+        return;
+      }
+    }
+    if (_conflictScroll.hasClients && filtered.isNotEmpty) {
+      final double fraction =
+          targetIndex / filtered.length.clamp(1, filtered.length);
+      final double targetOffset =
+          _conflictScroll.position.maxScrollExtent * fraction;
+      _conflictScroll.animateTo(
+        targetOffset,
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeInOut,
+      );
+    }
+  }
+
+  String? _currentFilePath() {
+    final SymbolChange? change = ref.read(selectedChangeProvider);
+    return change == null ? null : _filePathForChange(change);
   }
 
   bool _isInterestingFile(String path) {
@@ -258,16 +332,19 @@ class _DiffViewState extends ConsumerState<DiffView>
     final String leftRef = ref.watch(leftRefProvider);
     final String rightRef = ref.watch(rightRefProvider);
     final SymbolChange? selectedChange = ref.watch(selectedChangeProvider);
-  final bool hasHunkData =
-      asyncHunks.hasValue && (asyncHunks.value?.isNotEmpty ?? false);
-  final bool hasChunkData =
-      asyncChunks.hasValue && (asyncChunks.value?.isNotEmpty ?? false);
-  final bool filesLoading =
-      asyncDiffs.isLoading && changes.isEmpty && !asyncDiffs.hasError;
-  final bool hunksLoading =
-      asyncHunks.isLoading && (asyncHunks.value?.isEmpty ?? true);
-  final bool movedLoading =
-      asyncChunks.isLoading && (asyncChunks.value?.isEmpty ?? true);
+    final List<CodeHunk> allHunks = asyncHunks.value ?? const <CodeHunk>[];
+    _latestHunks = allHunks;
+    _hunkKeysByFile.clear();
+    final bool hasHunkData =
+        asyncHunks.hasValue && allHunks.isNotEmpty;
+    final bool hasChunkData =
+        asyncChunks.hasValue && (asyncChunks.value?.isNotEmpty ?? false);
+    final bool filesLoading =
+        asyncDiffs.isLoading && changes.isEmpty && !asyncDiffs.hasError;
+    final bool hunksLoading =
+        asyncHunks.isLoading && (asyncHunks.value?.isEmpty ?? true);
+    final bool movedLoading =
+        asyncChunks.isLoading && (asyncChunks.value?.isEmpty ?? true);
     final bool isLoading =
         (asyncDiffs.isLoading || asyncHunks.isLoading || asyncChunks.isLoading) &&
             (!hasHunkData && !hasChunkData && changes.isEmpty);
@@ -278,7 +355,7 @@ class _DiffViewState extends ConsumerState<DiffView>
     final int selectedHunkIndex = ref.watch(selectedHunkIndexProvider);
     final int selectedChunkIndex = ref.watch(selectedChunkIndexProvider);
     final Set<String> conflictFiles = {
-      for (final CodeHunk h in asyncHunks.value ?? const <CodeHunk>[])
+      for (final CodeHunk h in allHunks)
         if (h.hasConflict) h.filePath
     };
     final List<CodeChunk> sortedChunks =
@@ -288,6 +365,12 @@ class _DiffViewState extends ConsumerState<DiffView>
         : selectedChunkIndex.clamp(0, sortedChunks.length - 1);
     final int? selectedChunkId =
         sortedChunks.isEmpty ? null : sortedChunks[clampedChunkIndex].id;
+    final String? selectedFilePath =
+        selectedChange?.beforePath ?? selectedChange?.afterPath;
+    final bool selectedFileHasConflict = selectedFilePath != null &&
+        allHunks.any(
+          (CodeHunk h) => h.filePath == selectedFilePath && h.hasConflict,
+        );
     final AppSettings? settings =
         ref.watch(settingsControllerProvider).maybeWhen(
               data: (AppSettings s) => s,
@@ -315,6 +398,7 @@ class _DiffViewState extends ConsumerState<DiffView>
             final int next =
                 (selectedFileIndex + delta).clamp(0, len - 1);
             if (next != selectedFileIndex) {
+              _resetConflictPointer(_filePathForChange(changes[next]));
               ref.read(selectedChangeIndexProvider.notifier).state = next;
               ref.read(settingsControllerProvider.notifier).setSelectedFileIndex(next);
               return KeyEventResult.handled;
@@ -392,6 +476,7 @@ class _DiffViewState extends ConsumerState<DiffView>
                         changes: changes,
                         selectedIndex: selectedFileIndex,
                         onSelect: (int idx) {
+                          _resetConflictPointer(_filePathForChange(changes[idx]));
                           ref
                               .read(selectedChangeIndexProvider.notifier)
                               .state = idx;
@@ -401,6 +486,8 @@ class _DiffViewState extends ConsumerState<DiffView>
                         },
                         onArrowUp: () {
                           if (selectedFileIndex > 0) {
+                            _resetConflictPointer(
+                                _filePathForChange(changes[selectedFileIndex - 1]));
                             ref
                                 .read(selectedChangeIndexProvider.notifier)
                                 .state = selectedFileIndex - 1;
@@ -411,6 +498,8 @@ class _DiffViewState extends ConsumerState<DiffView>
                         },
                         onArrowDown: () {
                           if (selectedFileIndex < changes.length - 1) {
+                            _resetConflictPointer(
+                                _filePathForChange(changes[selectedFileIndex + 1]));
                             ref
                                 .read(selectedChangeIndexProvider.notifier)
                                 .state = selectedFileIndex + 1;
@@ -576,6 +665,16 @@ class _DiffViewState extends ConsumerState<DiffView>
                 change: selectedChange,
                 leftRef: leftRef,
                 rightRef: rightRef,
+                hasConflicts:
+                    selectedFileHasConflict && activeTab == ChangesTab.files,
+                onPrevConflict: () {
+                  if (activeTab != ChangesTab.files) return;
+                  _jumpToConflict(conflictFiles, up: true);
+                },
+                onNextConflict: () {
+                  if (activeTab != ChangesTab.files) return;
+                  _jumpToConflict(conflictFiles, up: false);
+                },
                 onPrev: () {
                   if (activeTab == ChangesTab.files) {
                     if (selectedFileIndex > 0) {
@@ -597,30 +696,30 @@ class _DiffViewState extends ConsumerState<DiffView>
                     }
                   }
                 },
-              onNext: () {
-                if (activeTab == ChangesTab.files) {
-                  if (selectedFileIndex < changes.length - 1) {
-                    ref
-                        .read(selectedChangeIndexProvider.notifier)
-                        .state = selectedFileIndex + 1;
-                    ref
-                        .read(settingsControllerProvider.notifier)
-                        .setSelectedFileIndex(selectedFileIndex + 1);
+                onNext: () {
+                  if (activeTab == ChangesTab.files) {
+                    if (selectedFileIndex < changes.length - 1) {
+                      ref
+                          .read(selectedChangeIndexProvider.notifier)
+                          .state = selectedFileIndex + 1;
+                      ref
+                          .read(settingsControllerProvider.notifier)
+                          .setSelectedFileIndex(selectedFileIndex + 1);
+                    }
+                  } else if (activeTab == ChangesTab.hunks) {
+                    final int maxIndex =
+                        (asyncHunks.value?.length ?? 0) - 1;
+                    if (selectedHunkIndex < maxIndex) {
+                      ref
+                          .read(selectedHunkIndexProvider.notifier)
+                          .state = selectedHunkIndex + 1;
+                      ref
+                          .read(settingsControllerProvider.notifier)
+                          .setSelectedHunkIndex(selectedHunkIndex + 1);
+                    }
                   }
-                } else if (activeTab == ChangesTab.hunks) {
-                  final int maxIndex =
-                      (asyncHunks.value?.length ?? 0) - 1;
-                  if (selectedHunkIndex < maxIndex) {
-                    ref
-                        .read(selectedHunkIndexProvider.notifier)
-                        .state = selectedHunkIndex + 1;
-                    ref
-                        .read(settingsControllerProvider.notifier)
-                        .setSelectedHunkIndex(selectedHunkIndex + 1);
-                  }
-                }
-              },
-            ),
+                },
+              ),
             Expanded(
               child: isLoading
                   ? Row(
@@ -643,12 +742,17 @@ class _DiffViewState extends ConsumerState<DiffView>
                             asyncChunks: AsyncValue.data(sortedChunks),
                             selectedIndex: clampedChunkIndex,
                           )
-                        : _HunkDiffView(
-                            asyncHunks: asyncHunks,
-                            selectedIndex: selectedHunkIndex,
-                            selectedFileChange: selectedChange,
-                            activeTab: activeTab,
-                          ),
+                    : _HunkDiffView(
+                        asyncHunks: asyncHunks,
+                        selectedIndex: selectedHunkIndex,
+                        selectedFileChange: selectedChange,
+                        activeTab: activeTab,
+                        scrollController:
+                            activeTab == ChangesTab.files ? _conflictScroll : null,
+                        hunkKeyBuilder: activeTab == ChangesTab.files
+                            ? _hunkKeyFor
+                            : null,
+                      ),
               ),
             ],
           ),
@@ -667,9 +771,15 @@ class _DiffMetaBar extends StatelessWidget {
     this.onPrev,
     this.onNext,
     this.alignEnd = false,
+    this.hasConflicts = false,
+    this.onPrevConflict,
+    this.onNextConflict,
   });
 
   final SymbolChange? change;
+  final bool hasConflicts;
+  final VoidCallback? onPrevConflict;
+  final VoidCallback? onNextConflict;
   final String leftRef;
   final String rightRef;
   final bool alignEnd;
@@ -703,6 +813,20 @@ class _DiffMetaBar extends StatelessWidget {
               onPressed: onNext,
             ),
             const SizedBox(width: 8),
+            if (hasConflicts) ...[
+              TextButton.icon(
+                icon: const Icon(Icons.arrow_upward, size: 16),
+                label: const Text('Prev conflict'),
+                onPressed: onPrevConflict,
+              ),
+              const SizedBox(width: 8),
+              TextButton.icon(
+                icon: const Icon(Icons.arrow_downward, size: 16),
+                label: const Text('Next conflict'),
+                onPressed: onNextConflict,
+              ),
+              const SizedBox(width: 8),
+            ],
           ],
         ),
         if (change != null) ...[
@@ -937,12 +1061,17 @@ class _HunkDiffView extends StatelessWidget {
     required this.selectedIndex,
     required this.selectedFileChange,
     required this.activeTab,
+    this.scrollController,
+    this.hunkKeyBuilder,
   });
 
   final AsyncValue<List<CodeHunk>> asyncHunks;
   final int selectedIndex;
   final SymbolChange? selectedFileChange;
   final ChangesTab activeTab;
+  final ScrollController? scrollController;
+  final GlobalKey Function(String filePath, int index, CodeHunk hunk)?
+      hunkKeyBuilder;
 
   @override
   Widget build(BuildContext context) {
@@ -989,12 +1118,16 @@ class _HunkDiffView extends StatelessWidget {
         );
       }
       return ListView.separated(
+        controller: scrollController,
         padding: EdgeInsets.zero,
         itemCount: filtered.length,
         separatorBuilder: (_, __) => const SizedBox(height: 12),
         itemBuilder: (BuildContext context, int index) {
           final CodeHunk hunk = filtered[index];
+          final GlobalKey? key =
+              hunkKeyBuilder?.call(hunk.filePath, index, hunk);
           return DiffLinesView(
+            key: key,
             lines: hunk.lines,
             header:
                 '${hunk.filePath}  (Old ${hunk.oldStart}-${hunk.oldStart + hunk.oldCount - 1} → '
