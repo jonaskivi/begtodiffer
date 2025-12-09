@@ -83,7 +83,16 @@ class CodeHunk {
   int get newEnd => newStart + newCount - 1;
 }
 
-enum DiffLineStatus { context, added, removed, changed, conflictLeft, conflictRight }
+enum DiffLineStatus {
+  context,
+  added,
+  removed,
+  changed,
+  conflictLeft,
+  conflictRight,
+  conflictStart,
+  conflictEnd
+}
 
 class DiffLine {
   final int? leftNumber;
@@ -331,6 +340,7 @@ void main() {
 List<CodeHunk> dummyCodeHunks() {
   return <CodeHunk>[
     CodeHunk(
+      hasConflict: false,
       filePath: 'lib/src/example.dart',
       oldStart: 3,
       oldCount: 4,
@@ -568,7 +578,23 @@ Future<List<CodeHunk>> loadHunkDiffs(
     return <CodeHunk>[];
   }
   final String output = _decodeOutput(result.stdout);
-  return _parseGitHunks(output);
+  List<CodeHunk> hunks = _parseGitHunks(output);
+  final _ConflictBundle bundle =
+      await _buildConflictHunks(repo, rightRef, hunks);
+  if (bundle.hunks.isNotEmpty) {
+    hunks = <CodeHunk>[
+      ...hunks.where((CodeHunk h) {
+        final List<_ConflictRange>? ranges = bundle.ranges[h.filePath];
+        if (ranges == null) return true;
+        for (final _ConflictRange r in ranges) {
+          if (_hunkOverlaps(h, r)) return false;
+        }
+        return true;
+      }),
+      ...bundle.hunks,
+    ];
+  }
+  return hunks;
 }
 
 Future<List<CodeChunk>> loadChunkDiffs(
@@ -629,22 +655,23 @@ Future<List<CodeChunk>> loadChunkDiffs(
       usedRef = rightRef;
     }
     if (fileText == null || fileText.isEmpty) {
-      chunks.add(CodeChunk(
-        id: chunkId++,
-        filePath: hunk.filePath,
-        rightFilePath: hunk.filePath,
+    chunks.add(CodeChunk(
+      id: chunkId++,
+      filePath: hunk.filePath,
+      rightFilePath: hunk.filePath,
         oldStart: hunk.oldStart,
         oldEnd: hunk.oldEnd,
         newStart: hunk.newStart,
         newEnd: hunk.newEnd,
         leftText: hunk.leftText,
         rightText: hunk.rightText,
-        name: 'Ignored',
-        kind: SymbolKind.other,
-        ignored: true,
-        category: ChunkCategory.unreadable,
-        lines: hunk.lines,
-      ));
+      name: 'Ignored',
+      kind: SymbolKind.other,
+      ignored: true,
+      category: ChunkCategory.unreadable,
+      lines: hunk.lines,
+      hasConflict: hunk.hasConflict || _hasConflictLines(hunk.lines),
+    ));
       continue;
     }
 
@@ -703,6 +730,7 @@ Future<List<CodeChunk>> loadChunkDiffs(
         ignored: true,
         category: cat,
         lines: hunk.lines,
+        hasConflict: hunk.hasConflict || _hasConflictLines(hunk.lines),
       ));
       continue;
     }
@@ -759,6 +787,7 @@ Future<List<CodeChunk>> loadChunkDiffs(
         ignored: true,
         category: ChunkCategory.importOnly,
         lines: hunk.lines,
+        hasConflict: hunk.hasConflict || _hasConflictLines(hunk.lines),
       ));
       continue;
     }
@@ -781,6 +810,7 @@ Future<List<CodeChunk>> loadChunkDiffs(
             ? ChunkCategory.importOnly
             : ChunkCategory.punctuationOnly,
         lines: hunk.lines,
+        hasConflict: hunk.hasConflict || _hasConflictLines(hunk.lines),
       ));
       continue;
     }
@@ -810,6 +840,8 @@ Future<List<CodeChunk>> loadChunkDiffs(
       ignored: false,
       category: moved != null ? ChunkCategory.moved : ChunkCategory.changed,
       lines: chunkLines,
+      hasConflict:
+          hunk.hasConflict || _hasConflictLines(chunkLines) || _hasConflictLines(hunk.lines),
     ));
   }
   logVerbose('[chunks] Built ${chunks.length} chunks');
@@ -1517,9 +1549,9 @@ _ConflictResult _markConflicts(List<DiffLine> lines) {
       out.add(DiffLine(
         leftNumber: line.leftNumber,
         rightNumber: line.rightNumber,
-        leftText: '',
-        rightText: '',
-        status: DiffLineStatus.context,
+        leftText: 'Conflict start',
+        rightText: 'Conflict start',
+        status: DiffLineStatus.conflictStart,
       ));
       continue;
     }
@@ -1528,8 +1560,8 @@ _ConflictResult _markConflicts(List<DiffLine> lines) {
       out.add(DiffLine(
         leftNumber: line.leftNumber,
         rightNumber: line.rightNumber,
-        leftText: '',
-        rightText: '',
+        leftText: '---',
+        rightText: '---',
         status: DiffLineStatus.context,
       ));
       continue;
@@ -1540,9 +1572,9 @@ _ConflictResult _markConflicts(List<DiffLine> lines) {
       out.add(DiffLine(
         leftNumber: line.leftNumber,
         rightNumber: line.rightNumber,
-        leftText: '',
-        rightText: '',
-        status: DiffLineStatus.context,
+        leftText: 'Conflict end',
+        rightText: 'Conflict end',
+        status: DiffLineStatus.conflictEnd,
       ));
       continue;
     }
@@ -1718,6 +1750,25 @@ double _structureSimilarity(String a, String b) {
   return inter / union;
 }
 
+bool _hasConflictLines(List<DiffLine> lines) {
+  for (final DiffLine line in lines) {
+    if (line.status == DiffLineStatus.conflictLeft ||
+        line.status == DiffLineStatus.conflictRight ||
+        line.status == DiffLineStatus.conflictStart ||
+        line.status == DiffLineStatus.conflictEnd) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool _hunkOverlaps(CodeHunk h, _ConflictRange r) {
+  final int hStart = h.oldStart;
+  final int hEnd = h.oldEnd;
+  return h.filePath.isNotEmpty &&
+      !(hEnd < r.start || hStart > r.end);
+}
+
 List<DiffLine> _alignHunkLinesSimple(List<DiffLine> lines) {
   final List<DiffLine> result = <DiffLine>[];
   final List<DiffLine> removedBuf = <DiffLine>[];
@@ -1844,4 +1895,149 @@ class _LineWithPos {
   final DiffLine line;
 
   _LineWithPos({required this.pos, required this.line});
+}
+class _ConflictRange {
+  final int start;
+  final int end;
+  const _ConflictRange(this.start, this.end);
+}
+
+class _ConflictBundle {
+  final List<CodeHunk> hunks;
+  final Map<String, List<_ConflictRange>> ranges;
+  const _ConflictBundle(this.hunks, this.ranges);
+}
+
+Future<_ConflictBundle> _buildConflictHunks(
+  String repo,
+  String ref,
+  List<CodeHunk> hunks,
+) async {
+  final Map<String, List<CodeHunk>> hunksByFile = <String, List<CodeHunk>>{};
+  for (final CodeHunk h in hunks) {
+    hunksByFile.putIfAbsent(h.filePath, () => <CodeHunk>[]).add(h);
+  }
+
+  final List<CodeHunk> conflictHunks = <CodeHunk>[];
+  final Map<String, List<_ConflictRange>> rangesByFile = <String, List<_ConflictRange>>{};
+
+  for (final MapEntry<String, List<CodeHunk>> entry in hunksByFile.entries) {
+    final String path = entry.key;
+    final String? text = await _readFileForRef(repo, ref, path);
+    if (text == null || text.isEmpty) continue;
+    final List<String> lines = text.split('\n');
+    int idx = 0;
+    while (idx < lines.length) {
+      if (!lines[idx].trimLeft().startsWith('<<<<<<<')) {
+        idx++;
+        continue;
+      }
+      final int start = idx;
+      int middle = -1;
+      int end = -1;
+      int scan = idx + 1;
+      while (scan < lines.length && middle == -1) {
+        if (lines[scan].trimLeft().startsWith('=======')) {
+          middle = scan;
+        }
+        scan++;
+      }
+      while (scan < lines.length && end == -1) {
+        if (lines[scan].trimLeft().startsWith('>>>>>>>')) {
+          end = scan;
+        }
+        scan++;
+      }
+      if (middle == -1 || end == -1) {
+        idx++;
+        continue;
+      }
+
+      final List<String> leftSection =
+          lines.sublist(start + 1, middle).toList();
+      final List<String> rightSection =
+          lines.sublist(middle + 1, end).toList();
+
+      final int leftLen = leftSection.length;
+      final int rightLen = rightSection.length;
+      final int maxLen = leftLen > rightLen ? leftLen : rightLen;
+
+      final List<DiffLine> conflictLines = <DiffLine>[];
+
+      // Start marker line.
+      conflictLines.add(DiffLine(
+        leftNumber: start + 1,
+        rightNumber: start + 1,
+        leftText: 'Conflict start',
+        rightText: 'Conflict start',
+        status: DiffLineStatus.conflictStart,
+      ));
+
+      for (int i = 0; i < maxLen; i++) {
+        final String lText = i < leftLen ? leftSection[i] : '';
+        final String rText = i < rightLen ? rightSection[i] : '';
+        final int? lNum = i < leftLen ? (start + 2 + i) : null;
+        final int? rNum = i < rightLen ? (middle + 2 + i) : null;
+        if (lText.isNotEmpty && rText.isNotEmpty) {
+          conflictLines.add(DiffLine(
+            leftNumber: lNum,
+            rightNumber: rNum,
+            leftText: lText,
+            rightText: rText,
+            status: DiffLineStatus.changed,
+          ));
+        } else if (lText.isNotEmpty) {
+          conflictLines.add(DiffLine(
+            leftNumber: lNum,
+            rightNumber: null,
+            leftText: lText,
+            rightText: '',
+            status: DiffLineStatus.conflictLeft,
+          ));
+        } else if (rText.isNotEmpty) {
+          conflictLines.add(DiffLine(
+            leftNumber: null,
+            rightNumber: rNum,
+            leftText: '',
+            rightText: rText,
+            status: DiffLineStatus.conflictRight,
+          ));
+        }
+      }
+
+      // End marker line.
+      conflictLines.add(DiffLine(
+        leftNumber: end + 1,
+        rightNumber: end + 1,
+        leftText: 'Conflict end',
+        rightText: 'Conflict end',
+        status: DiffLineStatus.conflictEnd,
+      ));
+
+      final int oldStart = start + 1;
+      final int newStart = start + 1;
+      final int oldCount = conflictLines.length;
+      final int newCount = conflictLines.length;
+
+      conflictHunks.add(CodeHunk(
+        filePath: path,
+        oldStart: oldStart,
+        oldCount: oldCount,
+        newStart: newStart,
+        newCount: newCount,
+        leftText: lines.sublist(oldStart - 1, oldStart - 1 + oldCount).join('\n'),
+        rightText: lines.sublist(newStart - 1, newStart - 1 + newCount).join('\n'),
+        lines: conflictLines,
+        hasConflict: true,
+      ));
+
+      rangesByFile.putIfAbsent(path, () => <_ConflictRange>[]).add(
+            _ConflictRange(oldStart, oldStart + oldCount - 1),
+          );
+
+      idx = end + 1;
+    }
+  }
+
+  return _ConflictBundle(conflictHunks, rangesByFile);
 }

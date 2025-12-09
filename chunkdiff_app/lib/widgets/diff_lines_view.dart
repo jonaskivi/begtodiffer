@@ -185,6 +185,9 @@ class _DiffLineRowState extends State<_DiffLineRow> {
         // Changed: cool tone on left
         return const Color(0xFF243248); // deep blue-gray
       case DiffLineStatus.conflictLeft:
+      case DiffLineStatus.conflictRight:
+      case DiffLineStatus.conflictStart:
+      case DiffLineStatus.conflictEnd:
         return const Color(0xFFb3006b); // vibrant pink for conflicts
       default:
         return Colors.transparent;
@@ -199,6 +202,9 @@ class _DiffLineRowState extends State<_DiffLineRow> {
         // Changed: warm tone on right
         return const Color(0xFF8a5c00); // vivid amber/orange, still dark enough for white text
       case DiffLineStatus.conflictRight:
+      case DiffLineStatus.conflictLeft:
+      case DiffLineStatus.conflictStart:
+      case DiffLineStatus.conflictEnd:
         return const Color(0xFFb3006b); // vibrant pink for conflicts
       default:
         return Colors.transparent;
