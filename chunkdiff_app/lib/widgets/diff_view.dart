@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/rendering.dart';
+import 'dart:math' as math;
 import 'dart:async';
 import 'dart:io';
 
@@ -193,49 +195,90 @@ class _DiffViewState extends ConsumerState<DiffView>
     if (conflictIndices.isEmpty) {
       return;
     }
-    final int last = conflictIndices.length - 1;
-    final double frac = (_conflictScroll.hasClients && _conflictScroll.position.maxScrollExtent > 0)
-        ? (_conflictScroll.offset / _conflictScroll.position.maxScrollExtent)
-        : 0.0;
-    final int scrollBased = (frac * last).round().clamp(0, last);
-    final int current = _conflictPointerByFile.containsKey(filePath)
-        ? (_conflictPointerByFile[filePath] ?? scrollBased).clamp(0, last)
-        : scrollBased;
-    int next = up ? current - 1 : current + 1;
-    if (next < 0) {
-      next = 0;
-      _showSnack(context, 'Reached the top conflict');
-    }
-    if (next > last) {
-      next = last;
-      _showSnack(context, 'Reached the bottom conflict');
-    }
-    _conflictPointerByFile[filePath] = next;
-    final int targetIndex = conflictIndices[next];
-    final List<GlobalKey>? keys = _hunkKeysByFile[filePath];
-    if (keys != null && targetIndex < keys.length) {
-      final BuildContext? ctx = keys[targetIndex].currentContext;
-      if (ctx != null) {
-        Scrollable.ensureVisible(
-          ctx,
-          alignment: 0.3,
-          duration: const Duration(milliseconds: 250),
-          curve: Curves.easeInOut,
-        );
-        return;
+
+    final _ConflictAnchors anchors =
+        _buildConflictAnchors(filePath, conflictIndices);
+    if (anchors.points.isEmpty || !_conflictScroll.hasClients) return;
+
+    const double epsilon = 0.5;
+    final double currentOffset = _conflictScroll.offset;
+    int currentIdx = 0;
+    for (int i = 0; i < anchors.points.length; i++) {
+      if (anchors.points[i].offset <= currentOffset + epsilon) {
+        currentIdx = i;
+      } else {
+        break;
       }
     }
-    if (_conflictScroll.hasClients && filtered.isNotEmpty) {
-      final double fraction =
-          targetIndex / filtered.length.clamp(1, filtered.length);
-      final double targetOffset =
-          _conflictScroll.position.maxScrollExtent * fraction;
-      _conflictScroll.animateTo(
-        targetOffset,
+    int targetIdx = up ? currentIdx - 1 : currentIdx + 1;
+    if (targetIdx < 0) {
+      targetIdx = 0;
+      _showSnack(context, 'Reached the top conflict');
+    }
+    if (targetIdx >= anchors.points.length) {
+      targetIdx = anchors.points.length - 1;
+      _showSnack(context, 'Reached the bottom conflict');
+    }
+    final _AnchorPoint target = anchors.points[targetIdx];
+    final List<GlobalKey>? keys = _hunkKeysByFile[filePath];
+    if (keys != null &&
+        target.hunkIndex < keys.length &&
+        keys[target.hunkIndex].currentContext != null) {
+      Scrollable.ensureVisible(
+        keys[target.hunkIndex].currentContext!,
+        alignment: target.isStart ? 0.0 : 1.0,
         duration: const Duration(milliseconds: 250),
         curve: Curves.easeInOut,
       );
+      return;
     }
+    _conflictScroll.animateTo(
+      target.offset,
+      duration: const Duration(milliseconds: 250),
+      curve: Curves.easeInOut,
+    );
+  }
+
+  _ConflictAnchors _buildConflictAnchors(
+      String filePath, List<int> conflictIndices) {
+    final List<_AnchorPoint> points = <_AnchorPoint>[];
+    if (!_conflictScroll.hasClients) return _ConflictAnchors(points);
+    final List<GlobalKey>? keys = _hunkKeysByFile[filePath];
+    if (keys != null) {
+      for (final int idx in conflictIndices) {
+        if (idx >= keys.length) continue;
+        final BuildContext? ctx = keys[idx].currentContext;
+        if (ctx == null) continue;
+        final RenderObject? renderObject = ctx.findRenderObject();
+        if (renderObject == null || renderObject is! RenderBox) continue;
+        final RenderAbstractViewport? viewport =
+            RenderAbstractViewport.of(renderObject);
+        if (viewport == null) continue;
+        final double top =
+            viewport.getOffsetToReveal(renderObject, 0.0).offset;
+        final double bottom =
+            viewport.getOffsetToReveal(renderObject, 1.0).offset;
+        points.add(_AnchorPoint(offset: top, hunkIndex: idx, isStart: true));
+        points.add(
+            _AnchorPoint(offset: math.max(top, bottom), hunkIndex: idx, isStart: false));
+      }
+    }
+    points.add(_AnchorPoint(
+        offset: _conflictScroll.position.minScrollExtent,
+        hunkIndex: 0,
+        isStart: true));
+    points.add(_AnchorPoint(
+        offset: _conflictScroll.position.maxScrollExtent,
+        hunkIndex: keys == null ? 0 : math.max(0, keys.length - 1),
+        isStart: false));
+    points.sort((_AnchorPoint a, _AnchorPoint b) => a.offset.compareTo(b.offset));
+    final List<_AnchorPoint> deduped = <_AnchorPoint>[];
+    for (final _AnchorPoint p in points) {
+      if (deduped.isEmpty || (p.offset - deduped.last.offset).abs() > 1.0) {
+        deduped.add(p);
+      }
+    }
+    return _ConflictAnchors(deduped);
   }
 
   void _jumpHunk(BuildContext context, bool up) {
@@ -888,16 +931,9 @@ class _DiffViewState extends ConsumerState<DiffView>
                 change: selectedChange,
                 leftRef: leftRef,
                 rightRef: rightRef,
-                hasConflicts:
-                    selectedFileHasConflict && activeTab == ChangesTab.files,
-                onPrevConflict: () {
-                  if (activeTab != ChangesTab.files) return;
-                  _jumpToConflict(context, conflictFiles, up: true);
-                },
-                onNextConflict: () {
-                  if (activeTab != ChangesTab.files) return;
-                  _jumpToConflict(context, conflictFiles, up: false);
-                },
+                hasConflicts: false,
+                onPrevConflict: null,
+                onNextConflict: null,
                 onPrev: () {
                   if (activeTab == ChangesTab.files) {
                     _pageScroll(context, _conflictScroll, up: true);
@@ -1670,4 +1706,21 @@ class _DebugPanelState extends State<_DebugPanel> {
       ),
     );
   }
+}
+
+class _AnchorPoint {
+  const _AnchorPoint({
+    required this.offset,
+    required this.hunkIndex,
+    required this.isStart,
+  });
+
+  final double offset;
+  final int hunkIndex;
+  final bool isStart;
+}
+
+class _ConflictAnchors {
+  const _ConflictAnchors(this.points);
+  final List<_AnchorPoint> points;
 }
