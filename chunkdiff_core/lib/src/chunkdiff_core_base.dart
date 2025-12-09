@@ -26,6 +26,7 @@ class CodeChunk {
   final bool ignored;
   final ChunkCategory category;
   final List<DiffLine> lines;
+  final bool hasConflict;
 
   const CodeChunk({
     required this.id,
@@ -42,6 +43,7 @@ class CodeChunk {
     required this.lines,
     this.category = ChunkCategory.changed,
     this.ignored = false,
+    this.hasConflict = false,
   });
 }
 
@@ -63,6 +65,7 @@ class CodeHunk {
   final String leftText;
   final String rightText;
   final List<DiffLine> lines;
+  final bool hasConflict;
 
   const CodeHunk({
     required this.filePath,
@@ -73,13 +76,14 @@ class CodeHunk {
     required this.leftText,
     required this.rightText,
     required this.lines,
+    this.hasConflict = false,
   });
 
   int get oldEnd => oldStart + oldCount - 1;
   int get newEnd => newStart + newCount - 1;
 }
 
-enum DiffLineStatus { context, added, removed, changed }
+enum DiffLineStatus { context, added, removed, changed, conflictLeft, conflictRight }
 
 class DiffLine {
   final int? leftNumber;
@@ -876,7 +880,10 @@ List<CodeHunk> _parseGitHunks(String diffOutput) {
       rightCollector.clear();
       return;
     }
-    final List<DiffLine> normalizedLines = _alignHunkLinesSimple(List<DiffLine>.from(currentLines));
+    final List<DiffLine> normalizedLines =
+        _alignHunkLinesSimple(List<DiffLine>.from(currentLines));
+    final _ConflictResult conflictResult = _markConflicts(normalizedLines);
+    final List<DiffLine> finalLines = conflictResult.lines;
     final String leftJoined = normalizedLines
         .where((DiffLine l) => l.leftText.isNotEmpty)
         .map((DiffLine l) => l.leftText)
@@ -893,7 +900,8 @@ List<CodeHunk> _parseGitHunks(String diffOutput) {
       newCount: newCount!,
       leftText: leftJoined,
       rightText: rightJoined,
-      lines: normalizedLines,
+      lines: finalLines,
+      hasConflict: conflictResult.hasConflict,
     ));
     currentLines.clear();
     leftCollector.clear();
@@ -1482,7 +1490,78 @@ List<DiffLine> _alignMovedLines({
     }
   }
 
-  return out;
+  return _markConflicts(out).lines;
+}
+
+class _ConflictResult {
+  final List<DiffLine> lines;
+  final bool hasConflict;
+
+  _ConflictResult(this.lines, this.hasConflict);
+}
+
+_ConflictResult _markConflicts(List<DiffLine> lines) {
+  final List<DiffLine> out = <DiffLine>[];
+  bool inConflict = false;
+  bool inRight = false;
+  bool hasConflict = false;
+
+  bool isMarker(String text, String marker) => text.trimLeft().startsWith(marker);
+
+  for (final DiffLine line in lines) {
+    final String text = line.leftText.isNotEmpty ? line.leftText : line.rightText;
+    if (isMarker(text, '<<<<<<<')) {
+      inConflict = true;
+      inRight = false;
+      hasConflict = true;
+      out.add(DiffLine(
+        leftNumber: line.leftNumber,
+        rightNumber: line.rightNumber,
+        leftText: '',
+        rightText: '',
+        status: DiffLineStatus.context,
+      ));
+      continue;
+    }
+    if (isMarker(text, '=======')) {
+      inRight = true;
+      out.add(DiffLine(
+        leftNumber: line.leftNumber,
+        rightNumber: line.rightNumber,
+        leftText: '',
+        rightText: '',
+        status: DiffLineStatus.context,
+      ));
+      continue;
+    }
+    if (isMarker(text, '>>>>>>>')) {
+      inConflict = false;
+      inRight = false;
+      out.add(DiffLine(
+        leftNumber: line.leftNumber,
+        rightNumber: line.rightNumber,
+        leftText: '',
+        rightText: '',
+        status: DiffLineStatus.context,
+      ));
+      continue;
+    }
+
+    if (inConflict) {
+      out.add(DiffLine(
+        leftNumber: inRight ? null : line.leftNumber,
+        rightNumber: inRight ? line.rightNumber : null,
+        leftText: inRight ? '' : text,
+        rightText: inRight ? text : '',
+        status: inRight ? DiffLineStatus.conflictRight : DiffLineStatus.conflictLeft,
+      ));
+      continue;
+    }
+
+    out.add(line);
+  }
+
+  return _ConflictResult(out, hasConflict);
 }
 
 bool _isRemovalOnly(List<DiffLine> lines) {

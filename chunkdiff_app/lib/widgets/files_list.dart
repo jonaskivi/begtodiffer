@@ -9,6 +9,7 @@ class FilesList extends StatelessWidget {
     required this.changes,
     required this.selectedIndex,
     required this.onSelect,
+    this.conflictFiles = const <String>{},
     this.focusNode,
     this.onArrowUp,
     this.onArrowDown,
@@ -18,6 +19,7 @@ class FilesList extends StatelessWidget {
   final List<SymbolChange> changes;
   final int selectedIndex;
   final ValueChanged<int> onSelect;
+  final Set<String> conflictFiles;
   final FocusNode? focusNode;
   final VoidCallback? onArrowUp;
   final VoidCallback? onArrowDown;
@@ -69,6 +71,8 @@ class FilesList extends StatelessWidget {
                   (change.beforePath ?? '').toLowerCase().contains(debugSearch.toLowerCase()));
           final bool isNew = change.beforePath == null || (change.beforePath?.isEmpty ?? true);
           final bool isRemoved = change.afterPath == null || (change.afterPath?.isEmpty ?? true);
+          final String keyPath = change.beforePath ?? change.afterPath ?? '';
+          final bool hasConflict = conflictFiles.contains(keyPath);
           Widget? trailing;
           if (debugHit) {
             trailing = Chip(
@@ -86,6 +90,13 @@ class FilesList extends StatelessWidget {
             trailing = Chip(
               label: const Text('Removed'),
               backgroundColor: Colors.red.shade800,
+              labelStyle: const TextStyle(color: Colors.white),
+              visualDensity: VisualDensity.compact,
+            );
+          } else if (hasConflict) {
+            trailing = Chip(
+              label: const Text('Conflict'),
+              backgroundColor: Colors.pink.shade600,
               labelStyle: const TextStyle(color: Colors.white),
               visualDensity: VisualDensity.compact,
             );

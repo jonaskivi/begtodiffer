@@ -277,6 +277,10 @@ class _DiffViewState extends ConsumerState<DiffView>
     final int selectedFileIndex = ref.watch(selectedChangeIndexProvider);
     final int selectedHunkIndex = ref.watch(selectedHunkIndexProvider);
     final int selectedChunkIndex = ref.watch(selectedChunkIndexProvider);
+    final Set<String> conflictFiles = {
+      for (final CodeHunk h in asyncHunks.value ?? const <CodeHunk>[])
+        if (h.hasConflict) h.filePath
+    };
     final List<CodeChunk> sortedChunks =
         _sortChunks(asyncChunks.value ?? const <CodeChunk>[]);
     final int clampedChunkIndex = sortedChunks.isEmpty
@@ -415,6 +419,7 @@ class _DiffViewState extends ConsumerState<DiffView>
                                 .setSelectedFileIndex(selectedFileIndex + 1);
                           }
                         },
+                        conflictFiles: conflictFiles,
                         focusNode: _filesFocus,
                         debugSearch: debugSearch,
                       );
@@ -866,6 +871,7 @@ class _HunkList extends StatelessWidget {
           final Color tileColor =
               selected ? Colors.indigo.withOpacity(0.15) : Colors.transparent;
           final Color hoverColor = Colors.indigo.withOpacity(0.08);
+          final bool hasConflict = chunk.hasConflict;
           return Material(
             color: tileColor,
             borderRadius: BorderRadius.circular(10),
@@ -889,12 +895,24 @@ class _HunkList extends StatelessWidget {
                   'Old ${chunk.oldStart}-${chunk.oldStart + chunk.oldCount - 1} → '
                   'New ${chunk.newStart}-${chunk.newStart + chunk.newCount - 1}',
                 ),
-                trailing: debugHit
-                    ? Chip(
-                        label: const Text('Debug'),
+                trailing: Wrap(
+                  spacing: 6,
+                  runSpacing: 4,
+                  children: [
+                    if (hasConflict)
+                      Chip(
+                        label: const Text('Conflict'),
+                        backgroundColor: Colors.pink.shade600,
+                        labelStyle: const TextStyle(color: Colors.white),
                         visualDensity: VisualDensity.compact,
-                      )
-                    : null,
+                      ),
+                    if (debugHit)
+                      const Chip(
+                        label: Text('Debug'),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                  ],
+                ),
               ),
             ),
           );
@@ -1072,14 +1090,14 @@ class _ChunksList extends StatelessWidget {
             ChunkCategory.usageOrUnresolved => 'Usage',
             ChunkCategory.unreadable => 'Unreadable',
           };
-          final Color categoryColor = switch (chunk.category) {
-            ChunkCategory.moved => Colors.blue.shade800,
-            ChunkCategory.changed => Colors.grey.shade700,
-            ChunkCategory.importOnly => Colors.teal.shade800,
-            ChunkCategory.punctuationOnly => Colors.brown.shade700,
-            ChunkCategory.usageOrUnresolved => Colors.purple.shade700,
-            ChunkCategory.unreadable => Colors.red.shade800,
-          };
+        final Color categoryColor = switch (chunk.category) {
+          ChunkCategory.moved => Colors.blue.shade800,
+          ChunkCategory.changed => Colors.grey.shade700,
+          ChunkCategory.importOnly => Colors.teal.shade800,
+          ChunkCategory.punctuationOnly => Colors.brown.shade700,
+          ChunkCategory.usageOrUnresolved => Colors.purple.shade700,
+          ChunkCategory.unreadable => Colors.red.shade800,
+        };
           final List<Widget> chips = <Widget>[
             Chip(
               label: Text(categoryLabel),
@@ -1087,11 +1105,18 @@ class _ChunksList extends StatelessWidget {
               labelStyle: const TextStyle(color: Colors.white),
               visualDensity: VisualDensity.compact,
             ),
-            if (debugHit)
-              const Chip(
-                label: Text('Debug'),
-                visualDensity: VisualDensity.compact,
-              ),
+          if (chunk.hasConflict)
+            Chip(
+              label: const Text('Conflict'),
+              backgroundColor: Colors.pink.shade600,
+              labelStyle: const TextStyle(color: Colors.white),
+              visualDensity: VisualDensity.compact,
+            ),
+          if (debugHit)
+            const Chip(
+              label: Text('Debug'),
+              visualDensity: VisualDensity.compact,
+            ),
           ];
         final Color tileColor =
             selected ? Colors.indigo.withOpacity(0.15) : Colors.transparent;
