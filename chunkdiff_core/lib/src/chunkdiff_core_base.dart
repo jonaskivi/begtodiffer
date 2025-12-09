@@ -1781,6 +1781,12 @@ List<CodeHunk> _splitHunkOutsideConflicts(
     ..sort((a, b) => a.start.compareTo(b.start));
 
   bool inConflictLine(DiffLine line) {
+    if (line.status == DiffLineStatus.conflictLeft ||
+        line.status == DiffLineStatus.conflictRight ||
+        line.status == DiffLineStatus.conflictStart ||
+        line.status == DiffLineStatus.conflictEnd) {
+      return true;
+    }
     for (final _ConflictRange r in sortedRanges) {
       final int? l = line.leftNumber;
       final int? rr = line.rightNumber;
@@ -1794,6 +1800,12 @@ List<CodeHunk> _splitHunkOutsideConflicts(
 
   bool segmentHasChange(List<DiffLine> seg) {
     for (final DiffLine l in seg) {
+      if (l.status == DiffLineStatus.conflictLeft ||
+          l.status == DiffLineStatus.conflictRight ||
+          l.status == DiffLineStatus.conflictStart ||
+          l.status == DiffLineStatus.conflictEnd) {
+        return false;
+      }
       if (l.status != DiffLineStatus.context) return true;
     }
     return false;
