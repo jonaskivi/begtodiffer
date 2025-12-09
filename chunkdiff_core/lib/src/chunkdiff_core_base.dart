@@ -783,7 +783,7 @@ Future<List<CodeChunk>> loadChunkDiffs(
 
     final List<DiffLine> chunkLines = moved == null
         ? _buildChunkLines(parentLines, parent.startLine, hunk.lines)
-        : _alignParentLines(
+        : _alignMovedLines(
             leftLines: parentLines,
             leftStart: parent.startLine,
             rightLines: moved.rightLines,
@@ -1313,6 +1313,176 @@ List<DiffLine> _alignParentLines({
     ));
   }
   return result;
+}
+
+List<DiffLine> _alignMovedLines({
+  required List<String> leftLines,
+  required int leftStart,
+  required List<String> rightLines,
+  required int rightStart,
+}) {
+  int i = 0;
+  int j = 0;
+  final int leftLen = leftLines.length;
+  final int rightLen = rightLines.length;
+  final List<DiffLine> out = <DiffLine>[];
+
+  double sim(String a, String b) {
+    if (a.isEmpty || b.isEmpty) return 0.0;
+    final List<String> ta =
+        a.split(RegExp(r'\\W+')).where((String s) => s.isNotEmpty).toList();
+    final List<String> tb =
+        b.split(RegExp(r'\\W+')).where((String s) => s.isNotEmpty).toList();
+    if (ta.isEmpty || tb.isEmpty) return 0.0;
+    final Set<String> sa = ta.toSet();
+    final Set<String> sb = tb.toSet();
+    final int inter = sa.intersection(sb).length;
+    final int union = sa.union(sb).length;
+    return union == 0 ? 0.0 : inter / union;
+  }
+
+  int leftNum(int idx) => leftStart + idx;
+  int rightNum(int idx) => rightStart + idx;
+
+  const int window = 8;
+
+  while (i < leftLen || j < rightLen) {
+    if (i < leftLen && j < rightLen && leftLines[i] == rightLines[j]) {
+      out.add(DiffLine(
+        leftNumber: leftNum(i),
+        rightNumber: rightNum(j),
+        leftText: leftLines[i],
+        rightText: rightLines[j],
+        status: DiffLineStatus.context,
+      ));
+      i++;
+      j++;
+      continue;
+    }
+
+    // Try to match left[i] somewhere ahead in right (windowed).
+    int bestR = -1;
+    double bestSim = 0.0;
+    int bestDist = 9999;
+    if (i < leftLen) {
+      final int rMax = rightLen < j + window ? rightLen : j + window;
+      for (int rIdx = j; rIdx < rMax; rIdx++) {
+        final double s = sim(leftLines[i], rightLines[rIdx]);
+        final int dist = (rIdx - j).abs();
+        if (s > bestSim || (s == bestSim && dist < bestDist)) {
+          bestSim = s;
+          bestDist = dist;
+          bestR = rIdx;
+        }
+      }
+    }
+
+    if (bestR != -1 && (bestSim >= 0.2 || bestDist <= 2)) {
+      // Add any intervening right-side additions before the match.
+      for (int k = j; k < bestR; k++) {
+        out.add(DiffLine(
+          leftNumber: null,
+          rightNumber: rightNum(k),
+          leftText: '',
+          rightText: rightLines[k],
+          status: DiffLineStatus.added,
+        ));
+      }
+      out.add(DiffLine(
+        leftNumber: leftNum(i),
+        rightNumber: rightNum(bestR),
+        leftText: leftLines[i],
+        rightText: rightLines[bestR],
+        status:
+            leftLines[i] == rightLines[bestR] ? DiffLineStatus.context : DiffLineStatus.changed,
+      ));
+      i++;
+      j = bestR + 1;
+      continue;
+    }
+
+    // Try to match right[j] somewhere ahead in left (windowed).
+    int bestL = -1;
+    bestSim = 0.0;
+    bestDist = 9999;
+    if (j < rightLen) {
+      final int lMax = leftLen < i + window ? leftLen : i + window;
+      for (int lIdx = i; lIdx < lMax; lIdx++) {
+        final double s = sim(leftLines[lIdx], rightLines[j]);
+        final int dist = (lIdx - i).abs();
+        if (s > bestSim || (s == bestSim && dist < bestDist)) {
+          bestSim = s;
+          bestDist = dist;
+          bestL = lIdx;
+        }
+      }
+    }
+
+    if (bestL != -1 && (bestSim >= 0.2 || bestDist <= 2)) {
+      for (int k = i; k < bestL; k++) {
+        out.add(DiffLine(
+          leftNumber: leftNum(k),
+          rightNumber: null,
+          leftText: leftLines[k],
+          rightText: '',
+          status: DiffLineStatus.removed,
+        ));
+      }
+      out.add(DiffLine(
+        leftNumber: leftNum(bestL),
+        rightNumber: rightNum(j),
+        leftText: leftLines[bestL],
+        rightText: rightLines[j],
+        status:
+            leftLines[bestL] == rightLines[j] ? DiffLineStatus.context : DiffLineStatus.changed,
+      ));
+      j++;
+      i = bestL + 1;
+      continue;
+    }
+
+    // Fallback: pair current lines if both exist.
+    if (i < leftLen && j < rightLen) {
+      out.add(DiffLine(
+        leftNumber: leftNum(i),
+        rightNumber: rightNum(j),
+        leftText: leftLines[i],
+        rightText: rightLines[j],
+        status: leftLines[i] == rightLines[j]
+            ? DiffLineStatus.context
+            : DiffLineStatus.changed,
+      ));
+      i++;
+      j++;
+      continue;
+    }
+
+    if (i < leftLen) {
+      out.add(DiffLine(
+        leftNumber: leftNum(i),
+        rightNumber: null,
+        leftText: leftLines[i],
+        rightText: '',
+        status: DiffLineStatus.removed,
+      ));
+      i++;
+      continue;
+    }
+
+    if (j < rightLen) {
+      out.add(DiffLine(
+        leftNumber: null,
+        rightNumber: rightNum(j),
+        leftText: '',
+        rightText: rightLines[j],
+        status: DiffLineStatus.added,
+      ));
+      j++;
+      continue;
+    }
+  }
+
+  return out;
 }
 
 bool _isRemovalOnly(List<DiffLine> lines) {
