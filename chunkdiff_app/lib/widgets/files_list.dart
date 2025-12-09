@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:chunkdiff_core/chunkdiff_core.dart';
+import 'package:flutter/scheduler.dart';
 
 class FilesList extends StatelessWidget {
   const FilesList({
@@ -24,6 +25,13 @@ class FilesList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Keep focus after rebuilds (e.g., when data refreshes).
+    if (focusNode?.hasFocus == true) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        focusNode?.requestFocus();
+      });
+    }
+
     if (changes.isEmpty) {
       return Center(
         child: Text(

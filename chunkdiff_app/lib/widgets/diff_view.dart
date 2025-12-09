@@ -22,6 +22,7 @@ class _DiffViewState extends ConsumerState<DiffView>
   late final AnimationController _shimmerController;
   late final FocusNode _filesFocus;
   late final FocusNode _hunksFocus;
+  late final FocusNode _rootFocus;
 
   @override
   void initState() {
@@ -32,6 +33,12 @@ class _DiffViewState extends ConsumerState<DiffView>
     )..repeat();
     _filesFocus = FocusNode(debugLabel: 'filesFocus');
     _hunksFocus = FocusNode(debugLabel: 'hunksFocus');
+    _rootFocus = FocusNode(debugLabel: 'rootFocus');
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && !_isTextFieldFocused()) {
+        _rootFocus.requestFocus();
+      }
+    });
   }
 
   @override
@@ -39,7 +46,14 @@ class _DiffViewState extends ConsumerState<DiffView>
     _shimmerController.dispose();
     _filesFocus.dispose();
     _hunksFocus.dispose();
+    _rootFocus.dispose();
     super.dispose();
+  }
+
+  bool _isTextFieldFocused() {
+    final FocusNode? node = FocusManager.instance.primaryFocus;
+    final Widget? w = node?.context?.widget;
+    return w is EditableText;
   }
 
   List<CodeChunk> _sortChunks(List<CodeChunk> raw) {
@@ -117,12 +131,60 @@ class _DiffViewState extends ConsumerState<DiffView>
     final String debugSearch = settings?.debugSearch ?? '';
     final List<String> debugLog = ref.watch(debugLogProvider);
 
-    return Row(
-      children: [
-        SizedBox(
-          width: 320,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+    return Focus(
+      focusNode: _rootFocus,
+      onKey: (FocusNode node, RawKeyEvent event) {
+        if (event is! RawKeyDownEvent) return KeyEventResult.ignored;
+        if (_isTextFieldFocused()) return KeyEventResult.ignored;
+        final LogicalKeyboardKey key = event.logicalKey;
+        int delta = 0;
+        if (key == LogicalKeyboardKey.arrowUp) delta = -1;
+        if (key == LogicalKeyboardKey.arrowDown) delta = 1;
+        if (delta == 0) return KeyEventResult.ignored;
+
+        switch (activeTab) {
+          case ChangesTab.files:
+            final int len = changes.length;
+            if (len == 0) return KeyEventResult.ignored;
+            final int next =
+                (selectedFileIndex + delta).clamp(0, len - 1);
+            if (next != selectedFileIndex) {
+              ref.read(selectedChangeIndexProvider.notifier).state = next;
+              ref.read(settingsControllerProvider.notifier).setSelectedFileIndex(next);
+              return KeyEventResult.handled;
+            }
+            break;
+          case ChangesTab.hunks:
+            final int len = asyncHunks.value?.length ?? 0;
+            if (len == 0) return KeyEventResult.ignored;
+            final int next =
+                (selectedHunkIndex + delta).clamp(0, len - 1);
+            if (next != selectedHunkIndex) {
+              ref.read(selectedHunkIndexProvider.notifier).state = next;
+              ref.read(settingsControllerProvider.notifier).setSelectedHunkIndex(next);
+              return KeyEventResult.handled;
+            }
+            break;
+          case ChangesTab.moved:
+            final int len = sortedChunks.length;
+            if (len == 0) return KeyEventResult.ignored;
+            final int next =
+                (clampedChunkIndex + delta).clamp(0, len - 1);
+            if (next != clampedChunkIndex) {
+              ref.read(selectedChunkIndexProvider.notifier).state = next;
+              ref.read(settingsControllerProvider.notifier).setSelectedChunkIndex(next);
+              return KeyEventResult.handled;
+            }
+            break;
+        }
+        return KeyEventResult.ignored;
+      },
+      child: Row(
+        children: [
+          SizedBox(
+            width: 320,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               _TabSwitcher(
                 activeTab: activeTab,
@@ -396,19 +458,19 @@ class _DiffViewState extends ConsumerState<DiffView>
               child: isLoading
                   ? Row(
                       children: [
-                          Expanded(
-                            child: _SkeletonPane(
-                              animation: _shimmerController,
-                            ),
+                        Expanded(
+                          child: _SkeletonPane(
+                            animation: _shimmerController,
                           ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: _SkeletonPane(
-                              animation: _shimmerController,
-                            ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: _SkeletonPane(
+                            animation: _shimmerController,
                           ),
-                        ],
-                      )
+                        ),
+                      ],
+                    )
                     : activeTab == ChangesTab.moved
                         ? ChunkDiffView(
                             asyncChunks: AsyncValue.data(sortedChunks),
@@ -425,6 +487,7 @@ class _DiffViewState extends ConsumerState<DiffView>
           ),
         ),
       ],
+    ),
     );
   }
 }
