@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart';
+import 'dart:async';
+import 'dart:io';
 
 import 'package:chunkdiff_core/chunkdiff_core.dart';
 import '../providers.dart';
@@ -23,6 +25,9 @@ class _DiffViewState extends ConsumerState<DiffView>
   late final FocusNode _filesFocus;
   late final FocusNode _hunksFocus;
   late final FocusNode _rootFocus;
+  StreamSubscription<FileSystemEvent>? _fsSub;
+  Timer? _debounce;
+  String? _watchedPath;
 
   @override
   void initState() {
@@ -44,6 +49,8 @@ class _DiffViewState extends ConsumerState<DiffView>
 
   @override
   void dispose() {
+    _cancelWatcher();
+    _debounce?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     _shimmerController.dispose();
     _filesFocus.dispose();
@@ -60,7 +67,141 @@ class _DiffViewState extends ConsumerState<DiffView>
       ref.invalidate(symbolDiffsProvider);
       ref.invalidate(hunkDiffsProvider);
       ref.invalidate(chunkDiffsProvider);
+      _restartWatcher();
     }
+  }
+
+  void _debouncedRefresh() {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 400), () {
+      ref.invalidate(symbolDiffsProvider);
+      ref.invalidate(hunkDiffsProvider);
+      ref.invalidate(chunkDiffsProvider);
+    });
+  }
+
+  void _cancelWatcher() {
+    _fsSub?.cancel();
+    _fsSub = null;
+    _watchedPath = null;
+  }
+
+  void _restartWatcher() {
+    final AppSettings? settings =
+        ref.read(settingsControllerProvider).maybeWhen(
+              data: (AppSettings s) => s,
+              orElse: () => null,
+            );
+    final String? repo = settings?.gitFolder;
+    if (repo == null || repo.isEmpty) {
+      _cancelWatcher();
+      return;
+    }
+    if (_watchedPath == repo && _fsSub != null) {
+      return; // already watching
+    }
+    _cancelWatcher();
+    try {
+      final Directory dir = Directory(repo);
+      if (!dir.existsSync()) {
+        return;
+      }
+      _watchedPath = repo;
+      _fsSub = dir
+          .watch(recursive: true)
+          .listen((FileSystemEvent event) {
+        final String path = event.path;
+        if (!_isInterestingFile(path)) return;
+        _debouncedRefresh();
+      }, onError: (Object err, StackTrace st) {
+        // ignore: avoid_print
+        print('File watcher error: $err');
+      });
+    } catch (e, st) {
+      // ignore: avoid_print
+      print('Unable to start watcher: $e\n$st');
+    }
+  }
+
+  bool _isInterestingFile(String path) {
+    final String lower = path.toLowerCase();
+    if (lower.contains('/.git/') || lower.endsWith('.lock') || lower.endsWith('.tmp')) {
+      return false;
+    }
+    const List<String> exts = <String>[
+      '.dart',
+      '.js',
+      '.jsx',
+      '.ts',
+      '.tsx',
+      '.java',
+      '.kt',
+      '.kts',
+      '.swift',
+      '.m',
+      '.mm',
+      '.c',
+      '.cc',
+      '.cpp',
+      '.h',
+      '.hpp',
+      '.cxx',
+      '.xml',
+      '.cs',
+      '.py',
+      '.rb',
+      '.go',
+      '.rs',
+      '.php',
+      '.scala',
+      '.groovy',
+      '.sh',
+      '.bash',
+      '.zsh',
+      '.fish',
+      '.yaml',
+      '.yml',
+      '.json',
+      '.md',
+      '.css',
+      '.scss',
+      '.less',
+      '.sql',
+      '.pl',
+      '.pm',
+      '.lua',
+      '.r',
+      '.jl',
+      '.hs',
+      '.erl',
+      '.ex',
+      '.exs',
+      '.clj',
+      '.cljs',
+      '.coffee',
+      '.vb',
+      '.f90',
+      '.f95',
+      '.fs',
+      '.fsi',
+      '.fsx',
+      '.ml',
+      '.mli',
+      '.nim',
+      '.tf',
+      '.lock',
+      '.txt',
+      '.toml',
+      '.ini',
+      '.cfg',
+      '.conf',
+      '.cmake',
+      '.mak',
+      '.mk',
+      'makefile',
+      'cmakelists.txt',
+    ];
+    return exts.any((String ext) => lower.endsWith(ext));
   }
 
   bool _isTextFieldFocused() {
