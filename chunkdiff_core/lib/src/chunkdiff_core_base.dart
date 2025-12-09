@@ -1763,10 +1763,10 @@ bool _hasConflictLines(List<DiffLine> lines) {
 }
 
 bool _hunkOverlaps(CodeHunk h, _ConflictRange r) {
-  final int hStart = h.oldStart;
-  final int hEnd = h.oldEnd;
-  return h.filePath.isNotEmpty &&
-      !(hEnd < r.start || hStart > r.end);
+  if (h.filePath.isEmpty) return false;
+  final bool oldOverlap = !(h.oldEnd < r.start || h.oldStart > r.end);
+  final bool newOverlap = !(h.newEnd < r.start || h.newStart > r.end);
+  return oldOverlap || newOverlap;
 }
 
 List<DiffLine> _alignHunkLinesSimple(List<DiffLine> lines) {
@@ -1923,7 +1923,8 @@ Future<_ConflictBundle> _buildConflictHunks(
 
   for (final MapEntry<String, List<CodeHunk>> entry in hunksByFile.entries) {
     final String path = entry.key;
-    final String? text = await _readFileForRef(repo, ref, path);
+    String? text = await _readFileForRef(repo, kWorktreeRef, path);
+    text ??= await _readFileForRef(repo, ref, path);
     if (text == null || text.isEmpty) continue;
     final List<String> lines = text.split('\n');
     int idx = 0;
@@ -2030,6 +2031,7 @@ Future<_ConflictBundle> _buildConflictHunks(
         lines: conflictLines,
         hasConflict: true,
       ));
+      logVerbose('[conflict] Detected conflict in $path lines ${start + 1}-${end + 1}');
 
       rangesByFile.putIfAbsent(path, () => <_ConflictRange>[]).add(
             _ConflictRange(oldStart, oldStart + oldCount - 1),
