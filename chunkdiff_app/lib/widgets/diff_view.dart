@@ -34,6 +34,9 @@ class _DiffViewState extends ConsumerState<DiffView>
   final Map<String, int> _hunkPointerByFile = <String, int>{};
   List<CodeHunk> _latestHunks = const <CodeHunk>[];
   late ScrollController _contentScroll;
+  ScaffoldFeatureController<SnackBar, SnackBarClosedReason>?
+      _snackController;
+  String? _pendingSnack;
 
   @override
   void initState() {
@@ -150,9 +153,28 @@ class _DiffViewState extends ConsumerState<DiffView>
   }
 
   void _showSnack(BuildContext context, String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message), duration: const Duration(milliseconds: 900)),
+    // If a snackbar is currently visible, replace any pending message and wait
+    // until the current one closes before showing the latest request.
+    if (_snackController != null) {
+      _pendingSnack = message;
+      return;
+    }
+    final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
+    _snackController = messenger.showSnackBar(
+      SnackBar(
+        content: Text(message),
+        duration: const Duration(milliseconds: 900),
+      ),
     );
+    _snackController?.closed.then((_) {
+      _snackController = null;
+      if (!mounted) return;
+      if (_pendingSnack != null) {
+        final String next = _pendingSnack!;
+        _pendingSnack = null;
+        _showSnack(context, next);
+      }
+    });
   }
 
   void _jumpToConflict(BuildContext context, Set<String> conflictFiles,
