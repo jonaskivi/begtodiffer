@@ -582,21 +582,23 @@ Future<List<CodeHunk>> loadHunkDiffs(
   final _ConflictBundle bundle =
       await _buildConflictHunks(repo, rightRef, hunks);
   if (bundle.hunks.isNotEmpty) {
-    final List<CodeHunk> filtered = hunks.where((CodeHunk h) {
+    final List<CodeHunk> merged = <CodeHunk>[];
+    for (final CodeHunk h in hunks) {
       final List<_ConflictRange>? ranges = bundle.ranges[h.filePath];
-      if (ranges == null) return true;
-      for (final _ConflictRange r in ranges) {
-        if (_hunkOverlaps(h, r)) return false;
+      if (ranges == null || ranges.isEmpty) {
+        merged.add(h);
+        continue;
       }
-      return true;
-    }).toList();
-    filtered.addAll(bundle.hunks);
-    filtered.sort((CodeHunk a, CodeHunk b) {
+      final List<CodeHunk> parts = _splitHunkOutsideConflicts(h, ranges);
+      merged.addAll(parts);
+    }
+    merged.addAll(bundle.hunks);
+    merged.sort((CodeHunk a, CodeHunk b) {
       final int cmp = a.filePath.compareTo(b.filePath);
       if (cmp != 0) return cmp;
       return a.oldStart.compareTo(b.oldStart);
     });
-    hunks = filtered;
+    hunks = merged;
   }
   return hunks;
 }
@@ -1771,6 +1773,103 @@ bool _hunkOverlaps(CodeHunk h, _ConflictRange r) {
   final bool oldOverlap = !(h.oldEnd < r.start || h.oldStart > r.end);
   final bool newOverlap = !(h.newEnd < r.start || h.newStart > r.end);
   return oldOverlap || newOverlap;
+}
+
+List<CodeHunk> _splitHunkOutsideConflicts(
+    CodeHunk h, List<_ConflictRange> ranges) {
+  final List<_ConflictRange> sortedRanges = List<_ConflictRange>.from(ranges)
+    ..sort((a, b) => a.start.compareTo(b.start));
+
+  bool inConflictLine(DiffLine line) {
+    for (final _ConflictRange r in sortedRanges) {
+      final int? l = line.leftNumber;
+      final int? rr = line.rightNumber;
+      if ((l != null && l >= r.start && l <= r.end) ||
+          (rr != null && rr >= r.start && rr <= r.end)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  bool segmentHasChange(List<DiffLine> seg) {
+    for (final DiffLine l in seg) {
+      if (l.status != DiffLineStatus.context) return true;
+    }
+    return false;
+  }
+
+  final List<CodeHunk> parts = <CodeHunk>[];
+  List<DiffLine> buffer = <DiffLine>[];
+
+  void flushBuffer() {
+    if (buffer.isEmpty) return;
+    if (!segmentHasChange(buffer)) {
+      buffer = <DiffLine>[];
+      return;
+    }
+    final int? minLeft = buffer
+        .map((DiffLine d) => d.leftNumber)
+        .where((int? n) => n != null)
+        .cast<int>()
+        .fold<int?>(null, (int? a, int b) => a == null ? b : (b < a ? b : a));
+    final int? maxLeft = buffer
+        .map((DiffLine d) => d.leftNumber)
+        .where((int? n) => n != null)
+        .cast<int>()
+        .fold<int?>(null, (int? a, int b) => a == null ? b : (b > a ? b : a));
+    final int? minRight = buffer
+        .map((DiffLine d) => d.rightNumber)
+        .where((int? n) => n != null)
+        .cast<int>()
+        .fold<int?>(null, (int? a, int b) => a == null ? b : (b < a ? b : a));
+    final int? maxRight = buffer
+        .map((DiffLine d) => d.rightNumber)
+        .where((int? n) => n != null)
+        .cast<int>()
+        .fold<int?>(null, (int? a, int b) => a == null ? b : (b > a ? b : a));
+
+    final int oldStart = minLeft ?? (minRight ?? 0);
+    final int newStart = minRight ?? (minLeft ?? 0);
+    final int oldEnd = maxLeft ?? (maxRight ?? oldStart);
+    final int newEnd = maxRight ?? (maxLeft ?? newStart);
+    final int oldCount = (oldEnd - oldStart + 1).clamp(0, 1 << 30);
+    final int newCount = (newEnd - newStart + 1).clamp(0, 1 << 30);
+
+    String buildText(bool left) {
+      final List<String> texts = <String>[];
+      for (final DiffLine l in buffer) {
+        final String t = left ? l.leftText : l.rightText;
+        if (t.isNotEmpty) {
+          texts.add(t);
+        }
+      }
+      return texts.join('\n');
+    }
+
+    parts.add(CodeHunk(
+      filePath: h.filePath,
+      oldStart: oldStart,
+      oldCount: oldCount,
+      newStart: newStart,
+      newCount: newCount,
+      leftText: buildText(true),
+      rightText: buildText(false),
+      lines: List<DiffLine>.from(buffer),
+      hasConflict: h.hasConflict,
+    ));
+    buffer = <DiffLine>[];
+  }
+
+  for (final DiffLine line in h.lines) {
+    if (inConflictLine(line)) {
+      flushBuffer();
+      continue;
+    }
+    buffer.add(line);
+  }
+  flushBuffer();
+  return parts;
 }
 
 List<DiffLine> _alignHunkLinesSimple(List<DiffLine> lines) {
