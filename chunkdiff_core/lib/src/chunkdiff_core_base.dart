@@ -582,17 +582,21 @@ Future<List<CodeHunk>> loadHunkDiffs(
   final _ConflictBundle bundle =
       await _buildConflictHunks(repo, rightRef, hunks);
   if (bundle.hunks.isNotEmpty) {
-    hunks = <CodeHunk>[
-      ...hunks.where((CodeHunk h) {
-        final List<_ConflictRange>? ranges = bundle.ranges[h.filePath];
-        if (ranges == null) return true;
-        for (final _ConflictRange r in ranges) {
-          if (_hunkOverlaps(h, r)) return false;
-        }
-        return true;
-      }),
-      ...bundle.hunks,
-    ];
+    final List<CodeHunk> filtered = hunks.where((CodeHunk h) {
+      final List<_ConflictRange>? ranges = bundle.ranges[h.filePath];
+      if (ranges == null) return true;
+      for (final _ConflictRange r in ranges) {
+        if (_hunkOverlaps(h, r)) return false;
+      }
+      return true;
+    }).toList();
+    filtered.addAll(bundle.hunks);
+    filtered.sort((CodeHunk a, CodeHunk b) {
+      final int cmp = a.filePath.compareTo(b.filePath);
+      if (cmp != 0) return cmp;
+      return a.oldStart.compareTo(b.oldStart);
+    });
+    hunks = filtered;
   }
   return hunks;
 }
@@ -1547,8 +1551,8 @@ _ConflictResult _markConflicts(List<DiffLine> lines) {
       inRight = false;
       hasConflict = true;
       out.add(DiffLine(
-        leftNumber: line.leftNumber,
-        rightNumber: line.rightNumber,
+        leftNumber: null,
+        rightNumber: null,
         leftText: 'Conflict start',
         rightText: 'Conflict start',
         status: DiffLineStatus.conflictStart,
@@ -1570,8 +1574,8 @@ _ConflictResult _markConflicts(List<DiffLine> lines) {
       inConflict = false;
       inRight = false;
       out.add(DiffLine(
-        leftNumber: line.leftNumber,
-        rightNumber: line.rightNumber,
+        leftNumber: null,
+        rightNumber: null,
         leftText: 'Conflict end',
         rightText: 'Conflict end',
         status: DiffLineStatus.conflictEnd,
@@ -1967,8 +1971,8 @@ Future<_ConflictBundle> _buildConflictHunks(
 
       // Start marker line.
       conflictLines.add(DiffLine(
-        leftNumber: start + 1,
-        rightNumber: start + 1,
+        leftNumber: null,
+        rightNumber: null,
         leftText: 'Conflict start',
         rightText: 'Conflict start',
         status: DiffLineStatus.conflictStart,
@@ -2008,8 +2012,8 @@ Future<_ConflictBundle> _buildConflictHunks(
 
       // End marker line.
       conflictLines.add(DiffLine(
-        leftNumber: end + 1,
-        rightNumber: end + 1,
+        leftNumber: null,
+        rightNumber: null,
         leftText: 'Conflict end',
         rightText: 'Conflict end',
         status: DiffLineStatus.conflictEnd,
