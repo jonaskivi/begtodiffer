@@ -81,7 +81,7 @@ class _DiffViewState extends ConsumerState<DiffView>
       _appActive = true;
       _refresh('App resumed – refreshing repo');
       _restartWatcher();
-      if (_shouldAnimateShimmer) _shimmerController.repeat();
+      _shimmerController.repeat();
     } else if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.inactive ||
         state == AppLifecycleState.hidden) {
