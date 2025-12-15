@@ -1,5 +1,10 @@
+import 'dart:async';
+import 'dart:io';
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:window_manager/window_manager.dart';
 
 import 'providers.dart';
 import 'widgets/diff_view.dart';
@@ -18,7 +23,7 @@ class ChunkDiffApp extends StatelessWidget {
           brightness: Brightness.dark,
         ),
       ),
-      home: const HomeScreen(),
+      home: const WindowStateWatcher(child: HomeScreen()),
     );
   }
 }
@@ -79,5 +84,66 @@ class HomeScreen extends ConsumerWidget {
         ),
       ),
     );
+  }
+}
+
+class WindowStateWatcher extends ConsumerStatefulWidget {
+  const WindowStateWatcher({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  ConsumerState<WindowStateWatcher> createState() => _WindowStateWatcherState();
+}
+
+class _WindowStateWatcherState extends ConsumerState<WindowStateWatcher>
+    with WindowListener {
+  Timer? _debounce;
+
+  @override
+  void initState() {
+    super.initState();
+    if (Platform.isMacOS || Platform.isWindows || Platform.isLinux) {
+      windowManager.addListener(this);
+    }
+  }
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    if (Platform.isMacOS || Platform.isWindows || Platform.isLinux) {
+      windowManager.removeListener(this);
+    }
+    super.dispose();
+  }
+
+  void _scheduleSave() {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 400), () async {
+      if (!mounted) return;
+      try {
+        final bool maximized = await windowManager.isMaximized();
+        final Size size = await windowManager.getSize();
+        await ref.read(settingsControllerProvider.notifier).setWindowState(
+              width: size.width,
+              height: size.height,
+              maximized: maximized,
+            );
+      } catch (_) {}
+    });
+  }
+
+  @override
+  void onWindowResize() => _scheduleSave();
+
+  @override
+  void onWindowUnmaximize() => _scheduleSave();
+
+  @override
+  void onWindowMaximize() => _scheduleSave();
+
+  @override
+  Widget build(BuildContext context) {
+    return widget.child;
   }
 }

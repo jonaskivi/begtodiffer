@@ -39,6 +39,7 @@ class _DiffViewState extends ConsumerState<DiffView>
   ScaffoldFeatureController<SnackBar, SnackBarClosedReason>?
       _snackController;
   String? _pendingSnack;
+  bool _appActive = true;
 
   @override
   void initState() {
@@ -77,12 +78,21 @@ class _DiffViewState extends ConsumerState<DiffView>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
     if (state == AppLifecycleState.resumed) {
+      _appActive = true;
       _refresh('App resumed – refreshing repo');
       _restartWatcher();
+      if (_shouldAnimateShimmer) _shimmerController.repeat();
+    } else if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.hidden) {
+      _appActive = false;
+      _cancelWatcher();
+      _shimmerController.stop();
     }
   }
 
   void _debouncedRefresh() {
+    if (!_appActive) return;
     _debounce?.cancel();
     _debounce = Timer(const Duration(milliseconds: 400), () {
       _refresh('Detected file changes – refreshing');
@@ -101,6 +111,7 @@ class _DiffViewState extends ConsumerState<DiffView>
   }
 
   void _restartWatcher() {
+    if (!_appActive) return;
     final AppSettings? settings =
         ref.read(settingsControllerProvider).maybeWhen(
               data: (AppSettings s) => s,
@@ -368,6 +379,21 @@ class _DiffViewState extends ConsumerState<DiffView>
     if (lower.contains('/.git/') || lower.endsWith('.lock') || lower.endsWith('.tmp')) {
       return false;
     }
+    const List<String> noisySegments = <String>[
+      '/build/',
+      '/out/',
+      '/node_modules/',
+      '/pods/',
+      '/.dart_tool/',
+      '/.pub-cache/',
+      '/deriveddata/',
+      '/.gradle/',
+      '/.idea/',
+      '/cmake-build-',
+    ];
+    for (final String seg in noisySegments) {
+      if (lower.contains(seg)) return false;
+    }
     const List<String> exts = <String>[
       '.dart',
       '.js',
@@ -478,8 +504,8 @@ class _DiffViewState extends ConsumerState<DiffView>
           return 4;
         case ChunkCategory.importOnly:
           return 5;
-      }
     }
+  }
 
     final List<CodeChunk> copy = List<CodeChunk>.from(raw);
     copy.sort((CodeChunk a, CodeChunk b) {
@@ -550,6 +576,16 @@ class _DiffViewState extends ConsumerState<DiffView>
     final bool showDebug = kDebugMode && (settings?.showDebugInfo ?? false);
     final String debugSearch = settings?.debugSearch ?? '';
     final List<String> debugLog = ref.watch(debugLogProvider);
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final bool loadingNow = isLoading || filesLoading || hunksLoading || movedLoading;
+      if (loadingNow && _appActive) {
+        if (!_shimmerController.isAnimating) _shimmerController.repeat();
+      } else {
+        if (_shimmerController.isAnimating) _shimmerController.stop();
+      }
+    });
 
     return Focus(
       focusNode: _rootFocus,

@@ -109,6 +109,21 @@ class SettingsController extends AutoDisposeAsyncNotifier<AppSettings> {
     await repo.save(next);
     state = AsyncData(next);
   }
+
+  Future<void> setWindowState({
+    required double width,
+    required double height,
+    required bool maximized,
+  }) async {
+    final SettingsRepository repo = ref.read(settingsRepositoryProvider);
+    final AppSettings next = (state.value ?? const AppSettings()).copyWith(
+      windowWidth: width,
+      windowHeight: height,
+      windowMaximized: maximized,
+    );
+    await repo.save(next);
+    state = AsyncData(next);
+  }
 }
 
 final AutoDisposeAsyncNotifierProvider<SettingsController, AppSettings>

@@ -39,6 +39,7 @@ dependencies:
   code_text_field: ^1.0.2
   highlight: ^0.7.0
   file_selector: ^1.0.3
+  window_manager: ^0.3.9
   path_provider: ^2.1.2
 
   # The following adds the Cupertino Icons font to your application.
