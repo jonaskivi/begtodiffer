@@ -2069,6 +2069,10 @@ Future<_ConflictBundle> _buildConflictHunks(
         continue;
       }
 
+      final int contextStart = start - 3 >= 0 ? start - 3 : 0;
+      final int contextEnd =
+          end + 3 < lines.length ? end + 3 : lines.length - 1;
+
       final List<String> leftSection =
           lines.sublist(start + 1, middle).toList();
       final List<String> rightSection =
@@ -2079,6 +2083,17 @@ Future<_ConflictBundle> _buildConflictHunks(
       final int maxLen = leftLen > rightLen ? leftLen : rightLen;
 
       final List<DiffLine> conflictLines = <DiffLine>[];
+
+      // Leading context (up to 3 lines).
+      for (int i = contextStart; i < start; i++) {
+        conflictLines.add(DiffLine(
+          leftNumber: i + 1,
+          rightNumber: i + 1,
+          leftText: lines[i],
+          rightText: lines[i],
+          status: DiffLineStatus.context,
+        ));
+      }
 
       // Start marker line.
       conflictLines.add(DiffLine(
@@ -2130,10 +2145,25 @@ Future<_ConflictBundle> _buildConflictHunks(
         status: DiffLineStatus.conflictEnd,
       ));
 
-      final int oldStart = start + 1;
-      final int newStart = start + 1;
+      // Trailing context (up to 3 lines).
+      for (int i = end + 1; i <= contextEnd; i++) {
+        conflictLines.add(DiffLine(
+          leftNumber: i + 1,
+          rightNumber: i + 1,
+          leftText: lines[i],
+          rightText: lines[i],
+          status: DiffLineStatus.context,
+        ));
+      }
+
+      final int oldStart = contextStart + 1;
+      final int newStart = contextStart + 1;
       final int oldCount = conflictLines.length;
       final int newCount = conflictLines.length;
+      final String leftJoined =
+          conflictLines.map((DiffLine l) => l.leftText).join('\n');
+      final String rightJoined =
+          conflictLines.map((DiffLine l) => l.rightText).join('\n');
 
       conflictHunks.add(CodeHunk(
         filePath: path,
@@ -2141,8 +2171,8 @@ Future<_ConflictBundle> _buildConflictHunks(
         oldCount: oldCount,
         newStart: newStart,
         newCount: newCount,
-        leftText: lines.sublist(oldStart - 1, oldStart - 1 + oldCount).join('\n'),
-        rightText: lines.sublist(newStart - 1, newStart - 1 + newCount).join('\n'),
+        leftText: leftJoined,
+        rightText: rightJoined,
         lines: conflictLines,
         hasConflict: true,
       ));
